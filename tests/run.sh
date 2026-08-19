@@ -4,7 +4,7 @@ set -euo pipefail
 # Test suite entry point: discover and run all tests/test-*.sh in sorted order
 failures=0
 
-for test_file in $(find "$(dirname "$0")" -name 'test-*.sh' -type f | sort); do
+while IFS= read -r -d '' test_file; do
   test_name=$(basename "$test_file")
 
   if bash "$test_file"; then
@@ -13,6 +13,6 @@ for test_file in $(find "$(dirname "$0")" -name 'test-*.sh' -type f | sort); do
     echo "FAIL: $test_name"
     ((failures++))
   fi
-done
+done < <(find "$(dirname "$0")" -name 'test-*.sh' -type f -print0 | sort -z)
 
 exit "$failures"

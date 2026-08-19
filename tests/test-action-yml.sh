@@ -99,13 +99,14 @@ if actual_output_names != expected_outputs:
         print(f"ERROR: unexpected outputs: {', '.join(extra)}", file=sys.stderr)
         sys.exit(1)
 
-# Verify output values reference the correct step
+# Verify output values reference the correct step with matching field name
 for output_name in expected_outputs:
     output = outputs[output_name]
     value = output.get('value', '')
-    if 'steps.dblift.outputs' not in value:
+    expected_ref = f'steps.dblift.outputs.{output_name}'
+    if expected_ref not in value:
         print(
-            f"ERROR: output '{output_name}' value does not reference steps.dblift.outputs",
+            f"ERROR: output '{output_name}' value does not contain '{expected_ref}' (got: {value})",
             file=sys.stderr
         )
         sys.exit(1)
