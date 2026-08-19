@@ -18,9 +18,24 @@ report. No product logic belongs here.
 ### Environment for local verification
 
 - `jq` is available.
-- **Docker is NOT available**, so PostgreSQL/MySQL cannot be exercised locally.
-  Use **SQLite** for every local end-to-end check — dblift supports it with no
-  driver extra (`sqlite:///test.db`).
+- **Docker is NOT available. Apple `container` (CLI 1.0.0) is**, and runs real
+  PostgreSQL and MySQL images locally. It differs from Docker in one way that
+  matters: **containers get their own IP on a private network and there is no
+  port publishing to `localhost`.** Read the address from `container ls` and
+  point dblift at it, for example
+  `DBLIFT_DB_URL=postgresql+psycopg://dblift:dblift@192.168.64.28:5432/dblift`.
+  Verified working end to end against `postgres:16`.
+- **The `tests/` suite stays on SQLite regardless.** It must run unchanged on
+  GitHub's `ubuntu-latest` runners, where Apple `container` does not exist and
+  the equivalent is a `services:` block. SQLite needs no driver extra, no
+  network and no daemon, so the suite stays hermetic and portable. Apple
+  `container` is for **manually validating the PostgreSQL recipes this
+  repository publishes** — the README quick start and the smoke job — before
+  they are trusted. Making `tests/` depend on a container runtime is a
+  regression, not an improvement.
+- Other containers are already running on this machine from unrelated work.
+  Create only your own, name them with a `dblift-action-` prefix, and remove
+  the ones you create when you are done.
 - `shellcheck`, `actionlint` and `yq` are NOT installed. Validate YAML with
   Python (`python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" FILE`).
 - `dblift` is already installed on this machine. **Always export
@@ -436,6 +451,26 @@ Weekly updates for the `github-actions` ecosystem, directory `/`.
 Every YAML file parses with `yaml.safe_load`. A check asserts `test.yml`
 contains both jobs and that `release.yml` triggers on `release` with type
 `published` and declares `contents: write`.
+
+**Plus one manual validation, because a workflow that only parses is not a
+workflow that works.** The `services:` PostgreSQL recipe in `test.yml` cannot be
+executed by the test suite, so prove the command sequence it runs is correct by
+running that sequence by hand against a real PostgreSQL, using Apple
+`container` (see Environment above):
+
+```bash
+container run -d --name dblift-action-pg \
+  -e POSTGRES_USER=dblift -e POSTGRES_PASSWORD=dblift -e POSTGRES_DB=dblift \
+  postgres:16
+container ls                       # read the container's IP
+export DBLIFT_DB_URL="postgresql+psycopg://dblift:dblift@<IP>:5432/dblift"
+```
+
+Then run the exact `migrate` → `validate` → `info` sequence the workflow
+triggers, against a fixture project using `type: postgresql`, and confirm it
+succeeds. Record the outcome in your report. Remove the container afterwards
+(`container rm -f dblift-action-pg`). Do not add this to `tests/run.sh` — the
+suite stays SQLite-only and runtime-free.
 
 ## Task 7: README, docs guard, CHANGELOG
 
