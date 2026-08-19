@@ -1,0 +1,64 @@
+name: 'DBLift'
+description: 'Run database migrations and validate migration state in CI'
+author: 'DBLift'
+branding:
+  icon: 'database'
+  color: 'blue'
+inputs:
+  command:
+    description: 'Shortcut pipeline: `check`, `migrate`, `validate` or `info`. Ignored when `args` is set.'
+    required: false
+    default: 'check'
+  args:
+    description: 'Raw arguments passed to the dblift CLI. Overrides `command`.'
+    required: false
+    default: ''
+  packages:
+    description: 'Full pip requirement specifiers to install, space-separated. Overrides `version` and `extras`.'
+    required: false
+    default: ''
+  version:
+    description: 'Version of the dblift package to install. Empty installs the latest release.'
+    required: false
+    default: ''
+  extras:
+    description: 'Database driver extra to install. Valid values: `postgresql`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `db2`, `duckdb`, `cosmosdb`, `mongodb`, `redshift`, `snowflake`, `neon`, `supabase`, `aurora-postgresql`, `alloydb`, `yugabytedb`, `timescaledb`, `citus`, `cockroachdb`, `all`.'
+    required: false
+    default: 'postgresql'
+  python-version:
+    description: 'Python version used to run dblift.'
+    required: false
+    default: '3.11'
+  working-directory:
+    description: 'Directory containing the dblift configuration file.'
+    required: false
+    default: '.'
+  env-name:
+    description: 'Environment to select, passed as `--env <name>`.'
+    required: false
+    default: ''
+  index-url:
+    description: 'Alternative pip index URL.'
+    required: false
+    default: ''
+  summary:
+    description: 'Write the result to the GitHub step summary.'
+    required: false
+    default: 'true'
+  pr-comment:
+    description: 'Post the migration plan as a pull request comment.'
+    required: false
+    default: 'false'
+outputs:
+  exit-code:
+    description: 'Exit status returned by the dblift CLI.'
+    value: ${{ steps.dblift.outputs.exit-code }}
+  pending-count:
+    description: 'Number of migrations not yet applied.'
+    value: ${{ steps.dblift.outputs.pending-count }}
+  sql:
+    description: 'SQL that a dry run reported it would execute.'
+    value: ${{ steps.dblift.outputs.sql }}
+runs:
+  using: 'composite'
+  steps: []
