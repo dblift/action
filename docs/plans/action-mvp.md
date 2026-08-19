@@ -70,7 +70,7 @@ yet — this task defines the contract that later tasks implement.
 - `action.yml` (repository root — required by Marketplace)
 - `LICENSE` — Apache License 2.0, copyright holder `DBLift`
 - `.gitignore` — ignore `__pycache__/`, `*.pyc`, `.venv/`, `tests/tmp/`
-- `README.md` — placeholder heading only; Task 6 writes the real content
+- `README.md` — placeholder heading only; Task 7 writes the real content
 
 ### `action.yml` metadata
 
@@ -115,7 +115,7 @@ Valid `extras` values, for the description text: `postgresql`, `mysql`,
 | `sql` | SQL that a dry run reported it would execute. |
 
 Declare outputs with `value: ${{ steps.<step-id>.outputs.<name> }}`. Use the
-step id `dblift` for the step that will run the CLI; Task 4 adds that step.
+step id `dblift` for the step that will run the CLI; Task 5 adds that step.
 
 ### Verification
 
@@ -303,10 +303,75 @@ _No pending migrations — nothing to apply._
 5. **SQL fence integrity** — assert the rendered output has an even number of
    ```` ``` ```` fence markers.
 
-## Task 4: Wire the scripts into `action.yml`
+
+## Task 4: `scripts/comment.sh` — sticky pull request comment
+
+Post the rendered migration plan as a single pull request comment that is
+updated on every push, rather than a new comment each time.
+
+### Interface
+
+`scripts/comment.sh <markdown-file>` reads the Markdown body from the given
+file and posts or updates the comment.
+
+Environment: `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, `GITHUB_STEP_SUMMARY`,
+`GITHUB_TOKEN`. Honour `GH_BIN` (default `gh`) so the tests can substitute a
+recorder; do not add any other test-only hook.
+
+### Behaviour
+
+1. **Resolve the pull request number** from the event payload at
+   `$GITHUB_EVENT_PATH`: `jq -r '.pull_request.number // empty'`. When the file
+   is missing, unreadable, or yields no number, this is not a pull request run
+   — write the body to `$GITHUB_STEP_SUMMARY` and **exit 0**.
+2. **Marker.** Prepend the hidden marker `<!-- dblift-action -->` as the first
+   line of every body written. It identifies the comment to update and is
+   invisible in rendered Markdown.
+3. **Find the existing comment**:
+   ```
+   gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+     --jq 'map(select(.body | contains("<!-- dblift-action -->"))) | .[0].id // empty'
+   ```
+4. **Update or create**: with an id, `PATCH repos/<repo>/issues/comments/<id>`;
+   without one, `POST repos/<repo>/issues/<pr>/comments`. Pass the body with
+   `--field body=@<file>` or an equivalent that does not expand shell
+   metacharacters in the SQL. Never interpolate the body into the command line.
+5. **Truncate** bodies exceeding **65000** bytes (the API limit is 65536; the
+   margin absorbs the marker and the notice). Cut at a line boundary, close any
+   unterminated fence, then append:
+   ```
+
+   _Output truncated. See the job logs for the full migration plan._
+   ```
+   The result must always have a balanced number of ```` ``` ```` markers.
+6. **Never fail the job.** Any `gh` failure — a read-only token on a fork pull
+   request is the common case — is reported on stderr, written to the step
+   summary instead, and the script exits 0. Posting a comment is a convenience;
+   it must not turn a passing migration check red.
+
+### Verification
+
+`tests/test-comment.sh` uses a mock `gh` at `tests/mocks/gh` that appends every
+invocation to `$GH_LOG` and prints canned responses driven by `$GH_MODE`
+(`empty`, `existing`, `fail`). Cases:
+
+1. **No existing comment** (`GH_MODE=empty`) — exactly one `POST` to
+   `issues/<pr>/comments`, and no `PATCH`.
+2. **Existing comment** (`GH_MODE=existing`, id `4242`) — exactly one `PATCH` to
+   `issues/comments/4242`, and no `POST`.
+3. **Marker present** — the body written in both cases starts with
+   `<!-- dblift-action -->`.
+4. **Oversized body** — a generated body well over 65000 bytes is truncated, the
+   notice is present, and the fence count is even.
+5. **`gh` failure** (`GH_MODE=fail`) — script exits **0**, the step summary file
+   contains the body, and stderr explains the failure.
+6. **Not a pull request** — `GITHUB_EVENT_PATH` pointing at `{}` → exit 0, the
+   step summary contains the body, and `$GH_LOG` is empty.
+
+## Task 5: Wire the scripts into `action.yml`
 
 Turn the interface from Task 1 into a working composite action using the
-scripts from Tasks 2 and 3.
+scripts from Tasks 2, 3 and 4.
 
 ### Steps, in order
 
@@ -315,11 +380,14 @@ scripts from Tasks 2 and 3.
 2. A `run` step with `id: dblift` and `shell: bash` invoking
    `"$GITHUB_ACTION_PATH/scripts/run.sh"`, passing every input through the
    `INPUT_*` environment variables named in Task 2.
-3. A `run` step, conditional on `inputs.pr-comment == 'true'`, that produces the
-   JSON log and renders it with `scripts/plan-sql.sh`. Task 5's workflow does
-   not exercise this; posting to the API is out of scope for this MVP — this
-   step writes the rendered Markdown to `$GITHUB_STEP_SUMMARY` and to the `sql`
-   output instead. Note that limitation in the input description.
+3. A `run` step with `shell: bash`, conditional on
+   `inputs.pr-comment == 'true'`, which:
+   - runs `dblift --log-format json --log-dir "$RUNNER_TEMP" --log-file plan.json migrate --dry-run --show-sql`
+     (adding `--env` when `env-name` is set),
+   - renders it with `scripts/plan-sql.sh` into `$RUNNER_TEMP/plan.md`,
+   - sets the `sql` output from that file using a heredoc delimiter,
+   - posts it with `scripts/comment.sh "$RUNNER_TEMP/plan.md"`.
+   This step must not fail the job: the plan is informational.
 
 Use `$GITHUB_ACTION_PATH` for every script reference — the action's files are
 not in the caller's workspace. Mark scripts executable in git
@@ -327,12 +395,12 @@ not in the caller's workspace. Mark scripts executable in git
 
 ### Verification
 
-- `action.yml` still parses, and a check asserts: every step has `shell: bash`
-  where it uses `run`, no step references a path outside `$GITHUB_ACTION_PATH`,
-  and the `dblift` step id matches the one the outputs reference.
+- `action.yml` parses, and a check asserts: every `run` step declares
+  `shell: bash`, every script reference is under `$GITHUB_ACTION_PATH`, and the
+  step id the outputs reference exists.
 - `git ls-files -s scripts/` shows mode `100755` for every script.
 
-## Task 5: CI workflows
+## Task 6: CI workflows
 
 ### `.github/workflows/test.yml`
 
@@ -345,9 +413,9 @@ Runs the local test suite on every push and pull request:
 
 Add a second job, `action-smoke`, that consumes the action from the checked-out
 repository (`uses: ./`) against the SQLite fixture project, asserting the job
-succeeds and that the `pending-count` output is populated. Use a step that
-copies `tests/fixtures/project` to a temporary directory first so the action
-runs outside the repository root.
+succeeds and that the `pending-count` output is populated. Copy
+`tests/fixtures/project` to a temporary directory first so the action runs
+outside the repository root.
 
 ### `.github/workflows/release.yml`
 
@@ -369,7 +437,7 @@ Every YAML file parses with `yaml.safe_load`. A check asserts `test.yml`
 contains both jobs and that `release.yml` triggers on `release` with type
 `published` and declares `contents: write`.
 
-## Task 6: README, docs guard, CHANGELOG
+## Task 7: README, docs guard, CHANGELOG
 
 ### `README.md`
 
@@ -383,8 +451,10 @@ Sections, in this order:
 3. **Inputs** — the table from Task 1.
 4. **Outputs** — the table from Task 1.
 5. **Examples** — three: validate-only on pull requests touching
-   `migrations/**`; selecting an environment with `env-name`; passing raw
-   arguments with `args`.
+   `migrations/**`; the migration plan posted on pull requests with
+   `pr-comment: true` (documenting the required
+   `permissions: pull-requests: write` and that fork pull requests fall back to
+   the step summary); and passing raw arguments with `args`.
 6. **How it works** — three sentences: it installs the package, runs the
    command in your runner, and reports the result. State plainly that the
    database is supplied by the caller and that nothing leaves the runner.
@@ -400,7 +470,9 @@ that must not appear in this repository. Seed the list with the licensing and
 configuration identifiers that belong to installations this Action does not
 document: `--license-key`, `DBLIFT_LICENSE_KEY`, `license_info`. Keep the list
 in one place at the top of the script, with a comment explaining that this
-repository documents the open-source surface only.
+repository documents the open-source surface only. Exclude
+`scripts/check-docs.sh` itself from the scan — it necessarily contains the
+tokens it forbids.
 
 Wire it into `tests/run.sh` and therefore into CI.
 
