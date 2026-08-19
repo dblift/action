@@ -51,11 +51,11 @@ YAML
 
 run_counter=0
 
-# Runs scripts/run.sh with the given working directory, command and args.
-# Sets LAST_EXIT, LAST_STDOUT_FILE, LAST_STDERR_FILE, LAST_OUTPUT_FILE,
-# LAST_SUMMARY_FILE for the caller to assert on.
+# Runs scripts/run.sh with the given working directory, command, args and
+# (optionally) packages. Sets LAST_EXIT, LAST_STDOUT_FILE, LAST_STDERR_FILE,
+# LAST_OUTPUT_FILE, LAST_SUMMARY_FILE for the caller to assert on.
 run_case() {
-  local working_dir="$1" command="$2" args="$3"
+  local working_dir="$1" command="$2" args="$3" packages="${4:-}"
   run_counter=$((run_counter + 1))
 
   local runner_temp="$tmp_root/runner-temp-$run_counter"
@@ -71,7 +71,7 @@ run_case() {
   env \
     INPUT_COMMAND="$command" \
     INPUT_ARGS="$args" \
-    INPUT_PACKAGES="" \
+    INPUT_PACKAGES="$packages" \
     INPUT_VERSION="" \
     INPUT_EXTRAS="" \
     INPUT_WORKING_DIRECTORY="$working_dir" \
@@ -167,6 +167,36 @@ fi
 pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
 if [ "$pending" != "2" ]; then
   fail "case5: expected pending-count=2 (no migration applied), got '$pending'"
+fi
+
+# --- Case 6: whitespace-only args -> falls through to command dispatch -----
+# Regression test: `read -ra` on whitespace-only input yields a zero-element
+# array; expanding that under `set -u` on bash 3.2 (the macOS-runner version)
+# aborts with "unbound variable" unless the empty-result case is handled.
+
+case6_dir="$tmp_root/case6"
+setup_fixture "$case6_dir"
+run_case "$case6_dir" info " "
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case6: expected exit 0 (whitespace-only args must fall back to command dispatch, not crash), got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
+if [ "$pending" != "2" ]; then
+  fail "case6: expected pending-count=2, got '$pending'"
+fi
+
+# --- Case 7: whitespace-only packages -> falls back to the extras specifier
+
+case7_dir="$tmp_root/case7"
+setup_fixture "$case7_dir"
+run_case "$case7_dir" info "" " "
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case7: expected exit 0 (whitespace-only packages must fall back to extras, not crash), got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+if ! grep -q '^Installing: dblift\[' "$LAST_STDOUT_FILE"; then
+  fail "case7: expected whitespace-only packages to fall back to the extras-based specifier (stdout: $(cat "$LAST_STDOUT_FILE"))"
 fi
 
 if [ "$failures" -eq 0 ]; then

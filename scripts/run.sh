@@ -15,22 +15,22 @@ dblift_bin="${DBLIFT_BIN:-dblift}"
 
 # --- 1. Resolve the install specifier and install it ------------------------
 
-if [ "${DBLIFT_SKIP_INSTALL:-}" != "1" ]; then
-  if [ -n "$INPUT_PACKAGES" ]; then
-    install_target="$INPUT_PACKAGES"
-  else
-    install_target="dblift[${INPUT_EXTRAS}]"
-    if [ -n "$INPUT_VERSION" ]; then
-      install_target="${install_target}==${INPUT_VERSION}"
-    fi
+install_specifiers=()
+read -ra install_specifiers <<< "${INPUT_PACKAGES:-}"
+
+if [ "${#install_specifiers[@]}" -eq 0 ]; then
+  install_target="dblift[${INPUT_EXTRAS:-}]"
+  if [ -n "${INPUT_VERSION:-}" ]; then
+    install_target="${install_target}==${INPUT_VERSION}"
   fi
-
-  echo "Installing: ${install_target}"
-
   read -ra install_specifiers <<< "$install_target"
+fi
 
+echo "Installing: ${install_specifiers[*]}"
+
+if [ "${DBLIFT_SKIP_INSTALL:-}" != "1" ]; then
   install_cmd=(install)
-  if [ -n "$INPUT_INDEX_URL" ]; then
+  if [ -n "${INPUT_INDEX_URL:-}" ]; then
     install_cmd+=(--index-url "$INPUT_INDEX_URL")
   fi
   install_cmd+=("${install_specifiers[@]}")
@@ -40,7 +40,7 @@ fi
 
 # --- 2. Move into the working directory --------------------------------------
 
-cd "$INPUT_WORKING_DIRECTORY"
+cd "${INPUT_WORKING_DIRECTORY:-}"
 
 # --- 3/4. Build and run the command, streaming and capturing its output -----
 
@@ -52,7 +52,7 @@ ran_commands=""
 
 run_dblift() {
   local cmd=("$dblift_bin" "$@")
-  if [ -n "$INPUT_ENV_NAME" ]; then
+  if [ -n "${INPUT_ENV_NAME:-}" ]; then
     cmd+=(--env "$INPUT_ENV_NAME")
   fi
 
@@ -69,11 +69,13 @@ ${cmd[*]}"
   set -e
 }
 
-if [ -n "$INPUT_ARGS" ]; then
-  read -ra extra_args <<< "$INPUT_ARGS"
+extra_args=()
+read -ra extra_args <<< "${INPUT_ARGS:-}"
+
+if [ "${#extra_args[@]}" -gt 0 ]; then
   run_dblift "${extra_args[@]}"
 else
-  case "$INPUT_COMMAND" in
+  case "${INPUT_COMMAND:-}" in
     migrate)
       run_dblift migrate
       ;;
@@ -93,7 +95,7 @@ else
       fi
       ;;
     *)
-      echo "run.sh: unknown command '${INPUT_COMMAND}' (valid values: migrate, validate, info, check)" >&2
+      echo "run.sh: unknown command '${INPUT_COMMAND:-}' (valid values: migrate, validate, info, check)" >&2
       exit 2
       ;;
   esac
@@ -104,7 +106,7 @@ fi
 pending_count=""
 
 probe_cmd=("$dblift_bin" info --format json)
-if [ -n "$INPUT_ENV_NAME" ]; then
+if [ -n "${INPUT_ENV_NAME:-}" ]; then
   probe_cmd+=(--env "$INPUT_ENV_NAME")
 fi
 
@@ -123,7 +125,7 @@ fi
 
 # --- 7. Write the step summary -----------------------------------------------
 
-if [ "$INPUT_SUMMARY" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+if [ "${INPUT_SUMMARY:-}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo "### dblift"
     echo
