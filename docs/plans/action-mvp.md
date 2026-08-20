@@ -428,9 +428,23 @@ Runs the local test suite on every push and pull request:
 
 Add a second job, `action-smoke`, that consumes the action from the checked-out
 repository (`uses: ./`) against the SQLite fixture project, asserting the job
-succeeds and that the `pending-count` output is populated. Copy
-`tests/fixtures/project` to a temporary directory first so the action runs
-outside the repository root.
+succeeds and that the `pending-count` output is exactly `0` after
+`command: check` has applied the migrations. Copy `tests/fixtures/project` to a
+temporary directory first so the action runs outside the repository root.
+Install bare `dblift` via `packages:` — SQLite needs no driver extra, and this
+is the only coverage of the `packages` input.
+
+Add a third job, `action-smoke-postgres`, with a `services:` PostgreSQL
+container, consuming the action the same way but with `extras: postgresql`
+against a PostgreSQL fixture project. This job exists because Task 7 publishes a
+PostgreSQL quick start in the README, and **a recipe this repository publishes
+but never executes is exactly the failure this plan set out to avoid.** It is
+also the only coverage of the default `extras` value.
+
+Note that GitHub's `services:` publishes container ports to `localhost` on the
+runner, unlike Apple `container` locally — so the connection URL here is
+`postgresql+psycopg://dblift:dblift@localhost:5432/dblift`, with a `ports:`
+mapping and a `pg_isready` health check on the service.
 
 ### `.github/workflows/release.yml`
 
