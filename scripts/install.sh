@@ -5,10 +5,10 @@
 # the environment (as set by the composite action from its inputs).
 #
 # Resolution precedence:
-#   1. INPUT_PACKAGES, verbatim and whitespace-split, when it holds at least
-#      one word.
+#   1. INPUT_PACKAGES, whitespace-split (newlines included), when it holds at
+#      least one word.
 #   2. Otherwise `dblift[<INPUT_EXTRAS>]`, with `==<INPUT_VERSION>` appended
-#      when INPUT_VERSION is set.
+#      when INPUT_VERSION is set; whitespace inside either value is stripped.
 # INPUT_INDEX_URL, when set, is passed to pip as --index-url either way.
 #
 # This runs as its own composite step, before the plan and run steps, so that
@@ -20,15 +20,28 @@ set -euo pipefail
 
 pip_bin="${PIP_BIN:-pip}"
 
+# Newlines become spaces first: `read -ra` stops at the first newline, which
+# would silently drop every package after line 1 of a `packages: |` block.
+packages_input="${INPUT_PACKAGES:-}"
+packages_input="${packages_input//$'\n'/ }"
+
 install_specifiers=()
-read -ra install_specifiers <<< "${INPUT_PACKAGES:-}"
+read -ra install_specifiers <<< "$packages_input"
 
 if [ "${#install_specifiers[@]}" -eq 0 ]; then
-  install_target="dblift[${INPUT_EXTRAS:-}]"
-  if [ -n "${INPUT_VERSION:-}" ]; then
-    install_target="${install_target}==${INPUT_VERSION}"
+  # Strip whitespace so a natural `extras: 'postgresql, mysql'` builds the
+  # valid specifier dblift[postgresql,mysql] instead of fracturing into two
+  # bogus pip arguments.
+  extras="${INPUT_EXTRAS:-}"
+  extras="${extras//[[:space:]]/}"
+  version="${INPUT_VERSION:-}"
+  version="${version//[[:space:]]/}"
+
+  install_target="dblift[${extras}]"
+  if [ -n "$version" ]; then
+    install_target="${install_target}==${version}"
   fi
-  read -ra install_specifiers <<< "$install_target"
+  install_specifiers=("$install_target")
 fi
 
 echo "Installing: ${install_specifiers[*]}"

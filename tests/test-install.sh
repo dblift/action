@@ -156,6 +156,28 @@ if ! grep -qF 'simulated failure' "$tmp_root/stderr-fail"; then
   fail "case6: expected pip's stderr to be surfaced (stderr: $(cat "$tmp_root/stderr-fail"))"
 fi
 
+# --- Case 7: multiline packages -> every line installed ---------------------
+# A `packages: |` block is natural YAML; `read -ra` alone stops at the first
+# newline and would silently drop every package after line 1.
+
+run_case "$(printf 'dblift[mysql]==2.1.0\npsycopg[binary]')" "" ""
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case7: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+assert_pip_argv "case7" "install dblift[mysql]==2.1.0 psycopg[binary]"
+
+# --- Case 8: whitespace in extras/version is stripped, not word-split -------
+# `extras: 'postgresql, mysql'` must build dblift[postgresql,mysql], not
+# fracture into two bogus pip arguments.
+
+run_case "" " 3.9.0 " "postgresql, mysql"
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case8: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+assert_pip_argv "case8" "install dblift[postgresql,mysql]==3.9.0"
+
 if [ "$failures" -eq 0 ]; then
   echo "test-install.sh: all cases passed"
 fi
