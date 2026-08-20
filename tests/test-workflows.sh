@@ -39,11 +39,23 @@ jobs = test_workflow.get('jobs', {})
 if 'test' not in jobs:
     print("ERROR: test.yml is missing the 'test' job", file=sys.stderr)
     sys.exit(1)
-if 'action-smoke' not in jobs:
-    print("ERROR: test.yml is missing the 'action-smoke' job", file=sys.stderr)
-    sys.exit(1)
 if 'action-smoke-postgres' not in jobs:
     print("ERROR: test.yml is missing the 'action-smoke-postgres' job", file=sys.stderr)
+    sys.exit(1)
+
+# --- test.yml: pushes are only built on main ---------------------------------
+# An unfiltered push trigger runs the whole suite twice for every commit
+# pushed to an open pull request. (No backticks in this heredoc: it is
+# unquoted, so the shell would run them as command substitutions.)
+
+test_on = test_workflow.get(True) or test_workflow.get('on') or {}
+push_trigger = test_on.get('push') or {}
+if push_trigger.get('branches') != ['main']:
+    print(
+        f"ERROR: test.yml 'push' trigger is not filtered to ['main'] "
+        f"(got: {push_trigger!r})",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 postgres_job = jobs['action-smoke-postgres']
@@ -132,6 +144,20 @@ if 'test' not in needs_list:
     print(f"ERROR: release.yml 'retag' job does not declare 'needs: test' (got: {needs!r})", file=sys.stderr)
     sys.exit(1)
 
+# --- release.yml: prereleases skip instead of failing ------------------------
+# The release/published trigger also fires for prereleases; without the guard
+# a v4.0.0-rc1 publish hits the strict version check and turns the run red.
+
+for job_name in ('test', 'retag'):
+    condition = release_jobs[job_name].get('if', '') or ''
+    if 'prerelease' not in condition:
+        print(
+            f"ERROR: release.yml '{job_name}' job is not guarded against "
+            f"prerelease events (if: {condition!r})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 # --- CI must actually run the test suite ------------------------------------
 # Replacing the suite invocation with anything else (a stub, an echo, a
 # renamed script) leaves every other assertion here green while CI checks
@@ -186,13 +212,13 @@ for name, job in smoke_jobs.items():
 # A smoke job that runs the Action but checks nothing passes whenever the
 # Action merely exits 0, which is exactly the failure the pr-comment bug had.
 
-required_output_assertions = {
-    "action-smoke": "pending-count",
-    "action-smoke-postgres": "pending-count",
-    "action-smoke-plan": "sql",
-}
+required_output_assertions = [
+    ("action-smoke-postgres", "pending-count"),
+    ("action-smoke-plan", "sql"),
+    ("action-smoke-plan", "pending-count"),
+]
 
-for name, output_name in required_output_assertions.items():
+for name, output_name in required_output_assertions:
     job = jobs.get(name)
     if job is None:
         print(f"ERROR: test.yml is missing the '{name}' job", file=sys.stderr)

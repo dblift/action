@@ -1,7 +1,10 @@
 name: test
 
+# Pushes are only built on main: an unfiltered `push` trigger would run the
+# whole suite twice for every commit pushed to an open pull request.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -24,33 +27,6 @@ jobs:
 
       - name: Run test suite
         run: bash tests/run.sh
-
-  action-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Copy fixture project outside the repository root
-        run: cp -r tests/fixtures/project "$RUNNER_TEMP/smoke-project"
-
-      - name: Run dblift action
-        id: dblift
-        uses: ./
-        with:
-          command: migrate
-          packages: dblift
-          working-directory: ${{ runner.temp }}/smoke-project
-
-      - name: Assert pending-count is exactly 0
-        env:
-          PENDING_COUNT: ${{ steps.dblift.outputs.pending-count }}
-        run: |
-          set -euo pipefail
-          if [ "$PENDING_COUNT" != "0" ]; then
-            echo "expected pending-count=0, got '${PENDING_COUNT}'" >&2
-            exit 1
-          fi
 
   action-smoke-postgres:
     runs-on: ubuntu-latest
@@ -132,5 +108,15 @@ jobs:
           if ! printf '%s\n' "$PLAN_SQL" | grep -q '^### V'; then
             echo "expected the plan to contain a migration heading, got:" >&2
             printf '%s\n' "$PLAN_SQL" >&2
+            exit 1
+          fi
+
+      - name: Assert pending-count is exactly 0
+        env:
+          PENDING_COUNT: ${{ steps.dblift.outputs.pending-count }}
+        run: |
+          set -euo pipefail
+          if [ "$PENDING_COUNT" != "0" ]; then
+            echo "expected pending-count=0, got '${PENDING_COUNT}'" >&2
             exit 1
           fi

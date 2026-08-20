@@ -4,8 +4,11 @@ on:
   release:
     types: [published]
 
+# Prereleases (e.g. v4.0.0-rc1) never move the floating major tag: both jobs
+# skip, leaving a neutral run instead of a red one.
 jobs:
   test:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,6 +26,7 @@ jobs:
         run: bash tests/run.sh
 
   retag:
+    if: ${{ !github.event.release.prerelease }}
     needs: test
     runs-on: ubuntu-latest
     # Only this job writes: it force-updates the major tag. The test job
