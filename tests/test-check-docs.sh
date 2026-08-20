@@ -41,30 +41,49 @@ if ! bash "$check_script" > /dev/null 2>&1; then
   fail "case1: check-docs.sh exited non-zero on the repository as written"
 fi
 
-# --- Case 2: a tracked Markdown file naming a forbidden token fails the
-# guard. check-docs.sh scans tracked files (git ls-files), so the scratch
-# file must actually be staged for it to be seen -- an untracked file would
-# make this check pass regardless of whether the guard works. The trap
-# below unstages and removes the scratch file even if the test aborts
-# partway.
+# --- Case 2: a tracked file naming a forbidden token fails the guard, in
+# every file type the guard claims to scan. check-docs.sh scans tracked files
+# (git ls-files), so each scratch file must actually be staged for it to be
+# seen -- an untracked file would make this check pass regardless of whether
+# the guard works. The trap below unstages and removes the scratch file even
+# if the test aborts partway.
+#
+# Every extension here is covered on purpose: the guard scans shell and YAML
+# as well as Markdown, because the workaround that motivated the widening
+# lived in a tracked .sh file, not in documentation. Testing only .md would
+# let the scan be narrowed back to Markdown with the suite still green.
 
-scratch_rel="tests/fixtures/check-docs-scratch.md"
-scratch_file="$repo_root/$scratch_rel"
+scratch_rel=""
+scratch_file=""
 
 cleanup() {
-  git -C "$repo_root" rm -f --cached --quiet -- "$scratch_rel" > /dev/null 2>&1 || true
-  rm -f "$scratch_file"
+  if [ -n "$scratch_rel" ]; then
+    git -C "$repo_root" rm -f --cached --quiet -- "$scratch_rel" > /dev/null 2>&1 || true
+  fi
+  if [ -n "$scratch_file" ]; then
+    rm -f "$scratch_file"
+  fi
 }
 trap cleanup EXIT
 
-printf '%s\n' "Scratch file for tests/test-check-docs.sh. Mentions ${planted_token}." > "$scratch_file"
-git -C "$repo_root" add -- "$scratch_rel"
+# Named check-docs-scratch.* rather than test-*.sh so that the .sh variant is
+# not picked up as a test file by tests/run.sh's discovery glob.
+for extension in md sh yml; do
+  scratch_rel="tests/fixtures/check-docs-scratch.${extension}"
+  scratch_file="$repo_root/$scratch_rel"
 
-if bash "$check_script" > /dev/null 2>&1; then
-  fail "case2: check-docs.sh exited 0 despite a tracked file containing a forbidden token"
-fi
+  printf '%s\n' "# Scratch file for tests/test-check-docs.sh. Mentions ${planted_token}." > "$scratch_file"
+  git -C "$repo_root" add -- "$scratch_rel"
 
-cleanup
+  if bash "$check_script" > /dev/null 2>&1; then
+    fail "case2/${extension}: check-docs.sh exited 0 despite a tracked .${extension} file containing a forbidden token"
+  fi
+
+  cleanup
+done
+
+scratch_rel=""
+scratch_file=""
 trap - EXIT
 
 # --- Case 3: outside a git work tree, the guard must fail loudly rather
