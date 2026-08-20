@@ -39,6 +39,14 @@ if 'test' not in jobs:
 if 'action-smoke' not in jobs:
     print("ERROR: test.yml is missing the 'action-smoke' job", file=sys.stderr)
     sys.exit(1)
+if 'action-smoke-postgres' not in jobs:
+    print("ERROR: test.yml is missing the 'action-smoke-postgres' job", file=sys.stderr)
+    sys.exit(1)
+
+postgres_job = jobs['action-smoke-postgres']
+if not isinstance(postgres_job.get('services'), dict) or not postgres_job['services']:
+    print("ERROR: test.yml 'action-smoke-postgres' job does not declare a 'services' block", file=sys.stderr)
+    sys.exit(1)
 
 # --- release.yml: triggers on release/published -----------------------------
 

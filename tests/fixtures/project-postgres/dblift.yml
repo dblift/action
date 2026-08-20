@@ -1,0 +1,4 @@
+database:
+  type: postgresql
+migrations:
+  directories: [migrations]
