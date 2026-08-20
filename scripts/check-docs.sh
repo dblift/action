@@ -24,13 +24,8 @@ forbidden_tokens=(
 # token for the reason given, not by oversight:
 #   - scripts/check-docs.sh: this script, which must name every token in
 #     $forbidden_tokens in order to forbid it.
-#   - docs/plans/action-mvp.md: the internal implementation plan, which
-#     states Global Constraint 6 in prose and therefore names the same
-#     tokens for the same reason. It is not published documentation of the
-#     Action's command surface.
 excluded_paths=(
   'scripts/check-docs.sh'
-  'docs/plans/action-mvp.md'
 )
 
 is_excluded() {
