@@ -20,14 +20,15 @@ fail() {
 }
 
 # The token planted by the cases below is read out of check-docs.sh's own
-# $forbidden_tokens list rather than hardcoded here. check-docs.sh scans
-# tracked *.sh files, so a literal copy in this file would itself trip the
-# guard; deriving it also keeps the test honest about whatever the guard
-# actually forbids today, instead of pinning a second copy that can drift.
+# $forbidden_tokens list rather than hardcoded here: a literal copy in this
+# file would itself trip the guard, and deriving it keeps the test honest
+# about whatever the guard actually forbids today. The array entries are
+# split-string literals (so check-docs.sh's own source never holds a
+# contiguous token), which is why they are evaluated through bash rather
+# than scraped textually.
 planted_token=$(
-  sed -n '/^forbidden_tokens=(/,/^)/p' "$check_script" |
-    sed -n "s/^  '\\(.*\\)'\$/\\1/p" |
-    head -n1
+  eval "$(sed -n '/^forbidden_tokens=(/,/^)/p' "$check_script")"
+  printf '%s' "${forbidden_tokens[0]}"
 )
 
 if [ -z "$planted_token" ]; then
@@ -66,17 +67,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Named check-docs-scratch.* rather than test-*.sh so that the .sh variant is
-# not picked up as a test file by tests/run.sh's discovery glob.
-for extension in md sh yml; do
-  scratch_rel="tests/fixtures/check-docs-scratch.${extension}"
+# Named check-docs-scratch* rather than test-*.sh so that the .sh variant is
+# not picked up as a test file by tests/run.sh's discovery glob. The list
+# includes a JSON fixture and an extensionless file: the guard scans every
+# tracked file, and a captured fixture or an extensionless mock can leak a
+# token just as easily as documentation.
+for scratch_name in check-docs-scratch.md check-docs-scratch.sh check-docs-scratch.yml check-docs-scratch.json check-docs-scratch-noext; do
+  scratch_rel="tests/fixtures/${scratch_name}"
   scratch_file="$repo_root/$scratch_rel"
 
   printf '%s\n' "# Scratch file for tests/test-check-docs.sh. Mentions ${planted_token}." > "$scratch_file"
   git -C "$repo_root" add -- "$scratch_rel"
 
   if bash "$check_script" > /dev/null 2>&1; then
-    fail "case2/${extension}: check-docs.sh exited 0 despite a tracked .${extension} file containing a forbidden token"
+    fail "case2/${scratch_name}: check-docs.sh exited 0 despite a tracked file containing a forbidden token"
   fi
 
   cleanup

@@ -61,22 +61,12 @@ fi
 
 # --- Case 4: end-to-end against the real dblift binary ---------------------
 
+# The canonical SQLite fixture project lives in tests/fixtures/project (the
+# same one the smoke jobs consume); copying it instead of re-declaring it here
+# keeps a schema change from silently testing a different project.
 case4_dir="$tmp_root/case4"
-mkdir -p "$case4_dir/migrations" "$case4_dir/logs"
-cat > "$case4_dir/migrations/V1__create_users.sql" <<'SQL'
-CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);
-SQL
-cat > "$case4_dir/migrations/V2__add_index.sql" <<'SQL'
-CREATE INDEX idx_users_email ON users(email);
-ALTER TABLE users ADD COLUMN name TEXT;
-SQL
-cat > "$case4_dir/dblift.yml" <<'YAML'
-database:
-  type: sqlite
-  url: "sqlite:///test.db"
-migrations:
-  directories: [migrations]
-YAML
+mkdir -p "$case4_dir/logs"
+cp -r "$fixtures_dir/project/." "$case4_dir/"
 
 case4_log="$case4_dir/logs/plan.json"
 

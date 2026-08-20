@@ -1,7 +1,7 @@
 #!/bin/bash
 # Token guard for public-repository hygiene: fail the build if any tracked
-# Markdown, shell or YAML file names a licensing or configuration identifier
-# that belongs to installations this Action does not document.
+# file names a licensing or configuration identifier that belongs to
+# installations this Action does not document.
 #
 # SCOPE -- this script checks exactly one thing: that none of the literal
 # strings in $forbidden_tokens appears in a scanned file. It is a denylist,
@@ -28,48 +28,21 @@ if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
   exit 1
 fi
 
-# Tokens that must never appear anywhere in this repository's tracked
-# documentation, scripts or workflow definitions. Keep the list in one place.
+# Tokens that must never appear anywhere in this repository's tracked files.
+# Keep the list in one place. Each literal is assembled from two adjacent
+# string halves so that this script's own source never contains a forbidden
+# token as a contiguous string: the scan below can then cover every tracked
+# file, this one included, with no exclusion list.
 forbidden_tokens=(
-  '--license-key'
-  'DBLIFT_LICENSE_KEY'
-  'license_info'
-  'DBLIFT_DISABLE_CLI_EXTENSIONS'
+  '--license''-key'
+  'DBLIFT_''LICENSE_KEY'
+  'license''_info'
+  'DBLIFT_DISABLE_''CLI_EXTENSIONS'
 )
-
-# Paths excluded from the scan, each necessarily containing a forbidden
-# token for the reason given, not by oversight:
-#   - scripts/check-docs.sh: this script, which must name every token in
-#     $forbidden_tokens in order to forbid it.
-excluded_paths=(
-  'scripts/check-docs.sh'
-)
-
-is_excluded() {
-  local path="$1" excluded
-  for excluded in "${excluded_paths[@]}"; do
-    if [ "$path" = "$excluded" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
 
 failures=0
 
 while IFS= read -r path; do
-  case "$path" in
-    *.md) ;;
-    *.sh) ;;
-    *.yml) ;;
-    *.yaml) ;;
-    *) continue ;;
-  esac
-
-  if is_excluded "$path"; then
-    continue
-  fi
-
   for token in "${forbidden_tokens[@]}"; do
     if grep -qiF -- "$token" "$path"; then
       echo "check-docs.sh: $path contains forbidden token '$token'" >&2
