@@ -1,0 +1,52 @@
+#!/bin/bash
+# Mock `gh` for tests/test-comment.sh, substituted in via scripts/comment.sh's
+# GH_BIN hook. Test-only environment hooks read by this mock (not by
+# scripts/comment.sh itself):
+#
+#   GH_LOG  - when set, every invocation's argv is appended here as one
+#             space-joined line, so tests can assert which gh calls were
+#             made. Whenever an invocation carries a `--field body=@<path>`
+#             argument, that file's content is also copied to "$GH_LOG.body"
+#             (overwriting any previous copy) so tests can inspect exactly
+#             what scripts/comment.sh would have posted, after the script
+#             itself has exited and cleaned up its own temp files.
+#   GH_MODE - selects the canned response:
+#               empty    - the "find existing comment" call returns no id
+#               existing - the "find existing comment" call returns id 4242
+#               fail     - every invocation exits 1
+set -euo pipefail
+
+if [ -n "${GH_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$GH_LOG"
+
+  for arg in "$@"; do
+    case "$arg" in
+      body=@*)
+        cp "${arg#body=@}" "${GH_LOG}.body"
+        ;;
+    esac
+  done
+fi
+
+if [ "${GH_MODE:-}" = "fail" ]; then
+  echo "mock gh: simulated failure" >&2
+  exit 1
+fi
+
+# The "find existing comment" call is the only one carrying --jq; the
+# create/update calls just need to succeed.
+is_list_call=0
+for arg in "$@"; do
+  if [ "$arg" = "--jq" ]; then
+    is_list_call=1
+    break
+  fi
+done
+
+if [ "$is_list_call" -eq 1 ]; then
+  if [ "${GH_MODE:-}" = "existing" ]; then
+    echo "4242"
+  fi
+else
+  echo '{"id": 1}'
+fi
