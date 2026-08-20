@@ -102,23 +102,59 @@ fi
 
 # --- 6. Write the step summary -----------------------------------------------
 
+# Reads content on stdin and prints the Markdown fence to wrap it in: one
+# backtick longer than the longest run of backticks the content holds, and
+# never shorter than three. Per CommonMark a fenced block is only closed by a
+# run of backticks at least as long as the one that opened it, so a fixed
+# three-backtick fence is broken out of by any content that contains a fence
+# of its own -- and both blocks below wrap content this script does not
+# control (raw dblift output, and the caller's own `args`).
+fence_for() {
+  local longest len
+
+  longest=$(awk '
+    {
+      run = 0
+      for (i = 1; i <= length($0); i++) {
+        if (substr($0, i, 1) == "`") {
+          run++
+          if (run > max) max = run
+        } else {
+          run = 0
+        }
+      }
+    }
+    END { print max + 0 }
+  ')
+
+  len=3
+  if [ "$((longest + 1))" -gt "$len" ]; then
+    len=$((longest + 1))
+  fi
+
+  printf '%*s' "$len" '' | tr ' ' '`'
+}
+
 if [ "${INPUT_SUMMARY:-}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  command_fence=$(printf '%s\n' "$ran_commands" | fence_for)
+  output_fence=$(fence_for < "$capture_file")
+
   {
     echo "### dblift"
     echo
     echo "**Command:**"
-    echo '```'
+    echo "$command_fence"
     echo "$ran_commands"
-    echo '```'
+    echo "$command_fence"
     echo
     echo "**Exit status:** ${exit_code}"
     echo
     echo "**Pending migrations:** ${pending_count}"
     echo
     echo "**Output:**"
-    echo '```'
+    echo "$output_fence"
     cat "$capture_file"
-    echo '```'
+    echo "$output_fence"
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 

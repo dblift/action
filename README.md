@@ -43,7 +43,7 @@ ephemeral Postgres service above.
 | Name                | Description                                                                                                    | Default      |
 | -------------------- | --------------------------------------------------------------------------------------------------------------- | ------------- |
 | `command`            | Shortcut pipeline: `check`, `migrate`, `validate` or `info`. Ignored when `args` is set.                        | `check`       |
-| `args`               | Raw arguments passed to the dblift CLI. Overrides `command`.                                                    | *(empty)*     |
+| `args`               | Raw arguments passed to the dblift CLI. Overrides `command`. Whitespace-split, so it cannot carry a quoted argument containing spaces. | *(empty)*     |
 | `packages`           | Full pip requirement specifiers to install, space-separated. Overrides `version` and `extras`.                  | *(empty)*     |
 | `version`            | Version of the dblift package to install. Empty installs the latest release.                                   | *(empty)*     |
 | `extras`             | Database driver extra to install. Valid values: `postgresql`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `db2`, `duckdb`, `cosmosdb`, `mongodb`, `redshift`, `snowflake`, `neon`, `supabase`, `aurora-postgresql`, `alloydb`, `yugabytedb`, `timescaledb`, `citus`, `cockroachdb`, `all`. | `postgresql`  |
@@ -60,7 +60,12 @@ ephemeral Postgres service above.
 | ----------------- | ----------------------------------------------------- |
 | `exit-code`       | Exit status returned by the dblift CLI.               |
 | `pending-count`   | Number of migrations not yet applied.                 |
-| `sql`             | SQL that a dry run reported it would execute.         |
+| `sql`             | SQL that a dry run reported it would execute. Populated when `pr-comment` is enabled. |
+
+Reading `exit-code` requires `continue-on-error: true` on the step that calls
+this Action. The Action exits with dblift's exit status, so without it a
+non-zero result fails the job immediately and no later step runs to read the
+output.
 
 ## Examples
 
@@ -104,8 +109,12 @@ jobs:
 This requires `permissions: pull-requests: write` on the workflow or job, as
 above. On pull requests from forks, the token GitHub provides is read-only,
 so the Action cannot post a comment there; it falls back to writing the plan
-to the job's step summary instead. Posting the comment also runs with
-`continue-on-error`, so a failure to comment never fails the job.
+to the job's step summary instead. Rendering and posting the plan absorbs its
+own failures, so it never fails the job.
+
+The plan is rendered before the command runs, so it reports the migrations
+that are pending at the start of the job — including for `command: check` and
+`command: migrate`, which go on to apply them.
 
 ### Passing raw arguments
 

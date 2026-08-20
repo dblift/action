@@ -4,9 +4,6 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,6 +25,11 @@ jobs:
   retag:
     needs: test
     runs-on: ubuntu-latest
+    # Only this job writes: it force-updates the major tag. The test job
+    # installs from PyPI and runs repository test code, and has no business
+    # holding a write-capable token.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v5

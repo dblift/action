@@ -229,6 +229,51 @@ if ! grep -qF 'DBLIFT_STDERR_MARKER_7f3a' "$LAST_SUMMARY_FILE"; then
   fail "case7: dblift's stderr did not reach the step summary"
 fi
 
+# --- Case 8: the step summary fences are sized to their content ------------
+# dblift's output is arbitrary text and `args` comes from the caller, so
+# either can contain a Markdown fence. A fixed three-backtick fence is closed
+# early by such content, and the rest of the output escapes the code block.
+# Same defect class as the one fixed in plan-sql.sh and comment.sh.
+
+fence_stub="$tmp_root/dblift-fence-stub.sh"
+cat > "$fence_stub" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = "info" ]; then
+  echo '{'
+  echo '  "migrations": []'
+  echo '}'
+  exit 0
+fi
+echo 'before the fence'
+echo '````'
+echo 'after the fence'
+STUB
+chmod +x "$fence_stub"
+
+case8_dir="$tmp_root/case8"
+setup_fixture "$case8_dir"
+run_case "$case8_dir" migrate "" "$fence_stub"
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case8: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+
+# The captured output holds a run of 4 backticks, so the fence wrapping it
+# must be at least 5 -- a 3- or 4-backtick fence would be closed by it.
+if grep -qx '````' "$LAST_SUMMARY_FILE" && ! grep -qx '`````' "$LAST_SUMMARY_FILE"; then
+  fail "case8: the step summary fence was not sized to its content; a 4-backtick line in dblift's output escapes the code block (summary: $(cat "$LAST_SUMMARY_FILE"))"
+fi
+if ! grep -qx '`````' "$LAST_SUMMARY_FILE"; then
+  fail "case8: expected a 5-backtick fence around output containing a 4-backtick line (summary: $(cat "$LAST_SUMMARY_FILE"))"
+fi
+
+# The content itself must survive intact on both sides of the embedded fence.
+for line in 'before the fence' 'after the fence'; do
+  if ! grep -qxF -- "$line" "$LAST_SUMMARY_FILE"; then
+    fail "case8: expected '$line' in the step summary"
+  fi
+done
+
 if [ "$failures" -eq 0 ]; then
   echo "test-run.sh: all cases passed"
 fi

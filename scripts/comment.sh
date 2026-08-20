@@ -4,10 +4,11 @@
 #
 # Usage: comment.sh <markdown-file>
 #
-# Reads GITHUB_REPOSITORY, GITHUB_EVENT_PATH, GITHUB_STEP_SUMMARY,
-# GITHUB_TOKEN and RUNNER_TEMP from the environment (as set by the runner).
-# GITHUB_TOKEN is not read directly by this script; it must already be
-# exported so that `gh` picks it up.
+# Reads GITHUB_REPOSITORY, GITHUB_EVENT_PATH, GITHUB_STEP_SUMMARY and
+# RUNNER_TEMP from the environment (as set by the runner), and needs an
+# authentication token exported for `gh`. action.yml supplies that as GH_TOKEN;
+# this script never reads the token itself, it only relies on `gh` picking it
+# up from the environment.
 #
 # When $GITHUB_EVENT_PATH does not resolve to a pull request number, or `gh`
 # is missing, or any `gh` call fails (e.g. a read-only token on a fork pull

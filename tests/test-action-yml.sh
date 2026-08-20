@@ -127,7 +127,7 @@ if ! grep -q "Licensed under the Apache License, Version 2.0" "${repo_root}/LICE
   exit 1
 fi
 
-if ! grep -q "Copyright 2024 DBLift" "${repo_root}/LICENSE"; then
+if ! grep -q "Copyright 2026 DBLift" "${repo_root}/LICENSE"; then
   echo "ERROR: LICENSE does not have correct copyright holder" >&2
   exit 1
 fi

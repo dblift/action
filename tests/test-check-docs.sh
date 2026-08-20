@@ -1,7 +1,12 @@
 #!/bin/bash
-# Verify scripts/check-docs.sh guards Global Constraint 6 (public-repository
-# hygiene): it must pass on this repository as committed, and it must reject
-# a tracked Markdown file that names a forbidden token.
+# Verify scripts/check-docs.sh does what it claims: pass on this repository
+# as committed, reject a tracked file that names a token from its denylist,
+# and fail loudly rather than silently outside a git work tree.
+#
+# The guard is a denylist over literal tokens, not a complete check of the
+# public-repository constraint -- it says nothing about which commands the
+# documentation names or how many external links it carries -- so these cases
+# only cover the token scan.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)

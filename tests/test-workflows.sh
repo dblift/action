@@ -74,11 +74,18 @@ if 'published' not in types:
     print(f"ERROR: release.yml release trigger does not include type 'published' (got: {types})", file=sys.stderr)
     sys.exit(1)
 
-# --- release.yml: declares contents: write -----------------------------------
+# --- release.yml: contents: write is scoped to the retag job -----------------
+# Only the retag job pushes a tag. Granting the write at workflow scope would
+# hand the same token to the test job, which installs from PyPI and runs
+# repository test code and needs no write access at all.
 
-permissions = release_workflow.get('permissions', {})
-if permissions.get('contents') != 'write':
-    print(f"ERROR: release.yml does not declare 'contents: write' permission (got: {permissions})", file=sys.stderr)
+workflow_permissions = release_workflow.get('permissions', {}) or {}
+if workflow_permissions.get('contents') == 'write':
+    print(
+        "ERROR: release.yml grants 'contents: write' at workflow scope; scope it "
+        "to the retag job instead",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 # --- release.yml: the retag job is gated on the test job passing -----------
@@ -89,6 +96,34 @@ if 'test' not in release_jobs:
     sys.exit(1)
 if 'retag' not in release_jobs:
     print("ERROR: release.yml is missing the 'retag' job", file=sys.stderr)
+    sys.exit(1)
+
+retag_permissions = release_jobs['retag'].get('permissions', {}) or {}
+if retag_permissions.get('contents') != 'write':
+    print(
+        f"ERROR: release.yml 'retag' job does not declare 'contents: write' "
+        f"(got: {retag_permissions})",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+test_job_permissions = release_jobs['test'].get('permissions', {}) or {}
+if test_job_permissions.get('contents') == 'write':
+    print(
+        "ERROR: release.yml 'test' job holds 'contents: write', which it never uses",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+# --- test.yml: read-only token ----------------------------------------------
+
+test_workflow_permissions = test_workflow.get('permissions', {}) or {}
+if test_workflow_permissions.get('contents') != 'read':
+    print(
+        f"ERROR: test.yml does not declare 'contents: read' permissions "
+        f"(got: {test_workflow_permissions})",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 needs = release_jobs['retag'].get('needs')

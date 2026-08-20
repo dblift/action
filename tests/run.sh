@@ -11,7 +11,7 @@ while IFS= read -r -d '' test_file; do
     echo "PASS: $test_name"
   else
     echo "FAIL: $test_name"
-    ((failures++))
+    failures=$((failures + 1))
   fi
 done < <(find "$(dirname "$0")" -name 'test-*.sh' -type f -print0 | sort -z)
 
