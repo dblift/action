@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-20
+
+### Changed
+
+- Bumped the bundled actions: `actions/setup-python` 5 → 7 and
+  `actions/cache` 4 → 6 (used inside the composite action), and
+  `actions/checkout` 5 → 7 in this repository's own workflows.
+
 ## [1.0.0] - 2026-08-20
 
 ### Added
