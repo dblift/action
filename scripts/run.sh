@@ -1,48 +1,25 @@
 #!/bin/bash
-# Install dblift, run the requested command, and report the result.
+# Run the requested dblift command and report the result.
 #
-# Reads INPUT_COMMAND, INPUT_ARGS, INPUT_PACKAGES, INPUT_VERSION, INPUT_EXTRAS,
-# INPUT_WORKING_DIRECTORY, INPUT_ENV_NAME, INPUT_INDEX_URL, INPUT_SUMMARY from
-# the environment (as set by the composite action from its inputs), plus the
-# runner-provided GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and RUNNER_TEMP.
+# dblift is installed by scripts/install.sh in an earlier composite step; this
+# script consumes an already-installed dblift and never installs anything.
 #
-# Test-only hooks, not used in production:
-#   DBLIFT_BIN          - dblift executable to invoke (default: dblift)
-#   DBLIFT_SKIP_INSTALL - when "1", skip the pip install step
+# Reads INPUT_COMMAND, INPUT_ARGS, INPUT_WORKING_DIRECTORY, INPUT_ENV_NAME and
+# INPUT_SUMMARY from the environment (as set by the composite action from its
+# inputs), plus the runner-provided GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
+# RUNNER_TEMP.
+#
+# Test-only hook, not used in production:
+#   DBLIFT_BIN - dblift executable to invoke (default: dblift)
 set -euo pipefail
 
 dblift_bin="${DBLIFT_BIN:-dblift}"
 
-# --- 1. Resolve the install specifier and install it ------------------------
-
-install_specifiers=()
-read -ra install_specifiers <<< "${INPUT_PACKAGES:-}"
-
-if [ "${#install_specifiers[@]}" -eq 0 ]; then
-  install_target="dblift[${INPUT_EXTRAS:-}]"
-  if [ -n "${INPUT_VERSION:-}" ]; then
-    install_target="${install_target}==${INPUT_VERSION}"
-  fi
-  read -ra install_specifiers <<< "$install_target"
-fi
-
-echo "Installing: ${install_specifiers[*]}"
-
-if [ "${DBLIFT_SKIP_INSTALL:-}" != "1" ]; then
-  install_cmd=(install)
-  if [ -n "${INPUT_INDEX_URL:-}" ]; then
-    install_cmd+=(--index-url "$INPUT_INDEX_URL")
-  fi
-  install_cmd+=("${install_specifiers[@]}")
-
-  pip "${install_cmd[@]}"
-fi
-
-# --- 2. Move into the working directory --------------------------------------
+# --- 1. Move into the working directory --------------------------------------
 
 cd "${INPUT_WORKING_DIRECTORY:-}"
 
-# --- 3/4. Build and run the command, streaming and capturing its output -----
+# --- 2/3. Build and run the command, streaming and capturing its output -----
 
 capture_file="$RUNNER_TEMP/dblift-run-output.log"
 : > "$capture_file"
@@ -101,7 +78,7 @@ else
   esac
 fi
 
-# --- 5. Compute pending-count, independently of the run above ---------------
+# --- 4. Compute pending-count, independently of the run above ---------------
 
 pending_count=""
 
@@ -116,14 +93,14 @@ if info_json=$("${probe_cmd[@]}"); then
   fi
 fi
 
-# --- 6. Write outputs ---------------------------------------------------------
+# --- 5. Write outputs ---------------------------------------------------------
 
 {
   echo "exit-code=${exit_code}"
   echo "pending-count=${pending_count}"
 } >> "$GITHUB_OUTPUT"
 
-# --- 7. Write the step summary -----------------------------------------------
+# --- 6. Write the step summary -----------------------------------------------
 
 if [ "${INPUT_SUMMARY:-}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
@@ -145,6 +122,6 @@ if [ "${INPUT_SUMMARY:-}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-# --- 8. Exit with the dblift exit status -------------------------------------
+# --- 7. Exit with the dblift exit status -------------------------------------
 
 exit "$exit_code"

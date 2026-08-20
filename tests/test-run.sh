@@ -1,7 +1,10 @@
 #!/bin/bash
-# Verify scripts/run.sh against the five cases from the task brief, using
-# SQLite fixtures and fake GITHUB_OUTPUT / GITHUB_STEP_SUMMARY / RUNNER_TEMP
-# files under tests/tmp/.
+# Verify scripts/run.sh against the cases from the task brief, using SQLite
+# fixtures and fake GITHUB_OUTPUT / GITHUB_STEP_SUMMARY / RUNNER_TEMP files
+# under tests/tmp/.
+#
+# run.sh no longer installs anything (scripts/install.sh owns that, covered by
+# tests/test-install.sh), so these cases require a working `dblift` on PATH.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,18 +20,6 @@ fail() {
   echo "FAIL: $1" >&2
   failures=$((failures + 1))
 }
-
-# A wrapper around the real dblift binary: this dev machine carries stale
-# extension metadata that makes dblift abort at import unless CLI extensions
-# are disabled. DBLIFT_DISABLE_CLI_EXTENSIONS is a local workaround for that
-# and must never appear in scripts/run.sh itself.
-dblift_wrapper="$tmp_root/dblift-wrapper.sh"
-cat > "$dblift_wrapper" <<'WRAP'
-#!/bin/bash
-export DBLIFT_DISABLE_CLI_EXTENSIONS=1
-exec dblift "$@"
-WRAP
-chmod +x "$dblift_wrapper"
 
 setup_fixture() {
   local dir="$1"
@@ -51,15 +42,17 @@ YAML
 
 run_counter=0
 
-# Runs scripts/run.sh with the given working directory, command, args and
-# (optionally) packages. Sets LAST_EXIT, LAST_STDOUT_FILE, LAST_STDERR_FILE,
-# LAST_OUTPUT_FILE, LAST_SUMMARY_FILE for the caller to assert on.
+# Runs scripts/run.sh with the given working directory, command and args.
+# The optional 4th argument overrides the dblift binary via run.sh's
+# DBLIFT_BIN hook. Sets LAST_EXIT, LAST_STDOUT_FILE, LAST_STDERR_FILE,
+# LAST_OUTPUT_FILE, LAST_SUMMARY_FILE and LAST_RUNNER_TEMP for the caller to
+# assert on.
 run_case() {
-  local working_dir="$1" command="$2" args="$3" packages="${4:-}"
+  local working_dir="$1" command="$2" args="$3" dblift_bin="${4:-dblift}"
   run_counter=$((run_counter + 1))
 
-  local runner_temp="$tmp_root/runner-temp-$run_counter"
-  mkdir -p "$runner_temp"
+  LAST_RUNNER_TEMP="$tmp_root/runner-temp-$run_counter"
+  mkdir -p "$LAST_RUNNER_TEMP"
   LAST_OUTPUT_FILE="$tmp_root/github-output-$run_counter"
   LAST_SUMMARY_FILE="$tmp_root/github-summary-$run_counter"
   LAST_STDOUT_FILE="$tmp_root/stdout-$run_counter"
@@ -71,18 +64,13 @@ run_case() {
   env \
     INPUT_COMMAND="$command" \
     INPUT_ARGS="$args" \
-    INPUT_PACKAGES="$packages" \
-    INPUT_VERSION="" \
-    INPUT_EXTRAS="" \
     INPUT_WORKING_DIRECTORY="$working_dir" \
     INPUT_ENV_NAME="" \
-    INPUT_INDEX_URL="" \
     INPUT_SUMMARY="true" \
     GITHUB_OUTPUT="$LAST_OUTPUT_FILE" \
     GITHUB_STEP_SUMMARY="$LAST_SUMMARY_FILE" \
-    RUNNER_TEMP="$runner_temp" \
-    DBLIFT_BIN="$dblift_wrapper" \
-    DBLIFT_SKIP_INSTALL=1 \
+    RUNNER_TEMP="$LAST_RUNNER_TEMP" \
+    DBLIFT_BIN="$dblift_bin" \
     bash "$run_script" >"$LAST_STDOUT_FILE" 2>"$LAST_STDERR_FILE"
   LAST_EXIT=$?
   set -e
@@ -106,6 +94,24 @@ pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
 if [ "$pending" != "0" ]; then
   fail "case1: expected pending-count=0, got '$pending'"
 fi
+
+# Global Constraint 4: run.sh must never write into the caller's workspace.
+# The merged-output capture belongs under $RUNNER_TEMP and nowhere else.
+if [ ! -s "$LAST_RUNNER_TEMP/dblift-run-output.log" ]; then
+  fail "case1: expected a non-empty output capture at \$RUNNER_TEMP/dblift-run-output.log (contents of \$RUNNER_TEMP: $(ls -A "$LAST_RUNNER_TEMP" 2>&1))"
+fi
+stray=$(find "$case1_dir" -name 'dblift-run-output.log' -print 2>/dev/null)
+if [ -n "$stray" ]; then
+  fail "case1: run.sh wrote its output capture into the working directory: $stray"
+fi
+
+# The step summary must report the command, exit status, pending count and
+# the captured output.
+for heading in '### dblift' '**Command:**' '**Exit status:** 0' '**Pending migrations:** 0' '**Output:**'; do
+  if ! grep -qF -- "$heading" "$LAST_SUMMARY_FILE"; then
+    fail "case1: expected the step summary to contain '$heading' (summary: $(cat "$LAST_SUMMARY_FILE"))"
+  fi
+done
 
 # --- Case 2: fresh database -> info succeeds, pending-count is 2 -----------
 
@@ -186,17 +192,41 @@ if [ "$pending" != "2" ]; then
   fail "case6: expected pending-count=2, got '$pending'"
 fi
 
-# --- Case 7: whitespace-only packages -> falls back to the extras specifier
+# --- Case 7: Global Constraint 3 -- dblift's stderr is always surfaced -----
+# A stub standing in for dblift writes a unique marker to stderr. run.sh
+# merges stderr into the stream it tees, so the marker must reach both the
+# caller's console and the captured output. Discarding or swallowing dblift's
+# stderr anywhere in run.sh turns this red.
+
+stderr_stub="$tmp_root/dblift-stderr-stub.sh"
+cat > "$stderr_stub" <<'STUB'
+#!/bin/bash
+echo "DBLIFT_STDERR_MARKER_7f3a" >&2
+# The pending-count probe calls `info --format json`; answer it with a
+# well-formed payload so the probe stays on its normal path.
+if [ "${1:-}" = "info" ]; then
+  echo '{'
+  echo '  "migrations": [{"version": "1", "status": "PENDING"}]'
+  echo '}'
+fi
+STUB
+chmod +x "$stderr_stub"
 
 case7_dir="$tmp_root/case7"
 setup_fixture "$case7_dir"
-run_case "$case7_dir" info "" " "
+run_case "$case7_dir" migrate "" "$stderr_stub"
 
 if [ "$LAST_EXIT" -ne 0 ]; then
-  fail "case7: expected exit 0 (whitespace-only packages must fall back to extras, not crash), got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+  fail "case7: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
 fi
-if ! grep -q '^Installing: dblift\[' "$LAST_STDOUT_FILE"; then
-  fail "case7: expected whitespace-only packages to fall back to the extras-based specifier (stdout: $(cat "$LAST_STDOUT_FILE"))"
+if ! grep -qF 'DBLIFT_STDERR_MARKER_7f3a' "$LAST_STDOUT_FILE"; then
+  fail "case7: dblift's stderr was not surfaced to the caller (stdout: $(cat "$LAST_STDOUT_FILE"))"
+fi
+if ! grep -qF 'DBLIFT_STDERR_MARKER_7f3a' "$LAST_RUNNER_TEMP/dblift-run-output.log"; then
+  fail "case7: dblift's stderr was not captured into the output log"
+fi
+if ! grep -qF 'DBLIFT_STDERR_MARKER_7f3a' "$LAST_SUMMARY_FILE"; then
+  fail "case7: dblift's stderr did not reach the step summary"
 fi
 
 if [ "$failures" -eq 0 ]; then

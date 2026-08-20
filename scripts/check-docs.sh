@@ -1,8 +1,14 @@
 #!/bin/bash
-# Guard Global Constraint 6 (public-repository hygiene): this repository
-# documents the open-source command surface only. Fail the build if any
-# tracked Markdown file or action.yml names a licensing or configuration
-# identifier that belongs to installations this Action does not document.
+# Token guard for public-repository hygiene: fail the build if any tracked
+# Markdown, shell or YAML file names a licensing or configuration identifier
+# that belongs to installations this Action does not document.
+#
+# SCOPE -- this script checks exactly one thing: that none of the literal
+# strings in $forbidden_tokens appears in a scanned file. It is a denylist,
+# not a complete check of the public-repository constraint. It does NOT
+# verify that the documented command surface is limited to the open-source
+# commands, and it does NOT check how many external links the documentation
+# carries. Those remain review responsibilities.
 #
 # Scans tracked files only, via `git ls-files` -- not a filesystem walk --
 # so it never trips on scratch output under tests/tmp/ or other
@@ -22,12 +28,13 @@ if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
   exit 1
 fi
 
-# Tokens that must never appear in this repository's public-facing docs or
-# in action.yml. Keep the list in one place.
+# Tokens that must never appear anywhere in this repository's tracked
+# documentation, scripts or workflow definitions. Keep the list in one place.
 forbidden_tokens=(
   '--license-key'
   'DBLIFT_LICENSE_KEY'
   'license_info'
+  'DBLIFT_DISABLE_CLI_EXTENSIONS'
 )
 
 # Paths excluded from the scan, each necessarily containing a forbidden
@@ -53,7 +60,9 @@ failures=0
 while IFS= read -r path; do
   case "$path" in
     *.md) ;;
-    action.yml) ;;
+    *.sh) ;;
+    *.yml) ;;
+    *.yaml) ;;
     *) continue ;;
   esac
 

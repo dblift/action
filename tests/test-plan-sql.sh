@@ -60,9 +60,6 @@ if [ "$actual_sentence" != "$expected_sentence" ]; then
 fi
 
 # --- Case 4: end-to-end against the real dblift binary ---------------------
-# This dev machine carries stale extension metadata that makes dblift abort
-# at import unless CLI extensions are disabled. DBLIFT_DISABLE_CLI_EXTENSIONS
-# is a local test workaround only and must never appear in scripts/plan-sql.sh.
 
 case4_dir="$tmp_root/case4"
 mkdir -p "$case4_dir/migrations" "$case4_dir/logs"
@@ -86,7 +83,6 @@ case4_log="$case4_dir/logs/plan.json"
 set +e
 (
   cd "$case4_dir"
-  export DBLIFT_DISABLE_CLI_EXTENSIONS=1
   dblift --log-format json --log-dir "$case4_dir/logs" --log-file plan.json \
          migrate --dry-run --show-sql
 )

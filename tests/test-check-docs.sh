@@ -14,6 +14,22 @@ fail() {
   failures=$((failures + 1))
 }
 
+# The token planted by the cases below is read out of check-docs.sh's own
+# $forbidden_tokens list rather than hardcoded here. check-docs.sh scans
+# tracked *.sh files, so a literal copy in this file would itself trip the
+# guard; deriving it also keeps the test honest about whatever the guard
+# actually forbids today, instead of pinning a second copy that can drift.
+planted_token=$(
+  sed -n '/^forbidden_tokens=(/,/^)/p' "$check_script" |
+    sed -n "s/^  '\\(.*\\)'\$/\\1/p" |
+    head -n1
+)
+
+if [ -z "$planted_token" ]; then
+  echo "ERROR: could not read a forbidden token out of $check_script" >&2
+  exit 1
+fi
+
 # --- Case 1: the guard passes on the repository as written ------------------
 
 if ! bash "$check_script" > /dev/null 2>&1; then
@@ -36,7 +52,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf '%s\n' "Scratch file for tests/test-check-docs.sh. Mentions DBLIFT_LICENSE_KEY." > "$scratch_file"
+printf '%s\n' "Scratch file for tests/test-check-docs.sh. Mentions ${planted_token}." > "$scratch_file"
 git -C "$repo_root" add -- "$scratch_rel"
 
 if bash "$check_script" > /dev/null 2>&1; then
@@ -64,7 +80,7 @@ trap cleanup_nogit EXIT
 
 mkdir -p "$nogit_dir/scripts"
 cp "$check_script" "$nogit_dir/scripts/check-docs.sh"
-printf '%s\n' 'Leaks DBLIFT_LICENSE_KEY outside any git work tree.' > "$nogit_dir/leak.md"
+printf '%s\n' "Leaks ${planted_token} outside any git work tree." > "$nogit_dir/leak.md"
 
 if bash "$nogit_dir/scripts/check-docs.sh" > /dev/null 2>&1; then
   fail "case3: check-docs.sh exited 0 outside a git work tree instead of failing loudly"

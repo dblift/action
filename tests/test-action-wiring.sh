@@ -3,8 +3,11 @@ set -euo pipefail
 
 # Test that action.yml's steps are wired correctly: scripts run under
 # $GITHUB_ACTION_PATH, every run step declares shell: bash, the step ids the
-# outputs reference exist, the dblift step's env forwards every INPUT_*
-# variable run.sh reads, and the plan/comment step is gated on pr-comment.
+# outputs reference exist, the install and dblift steps' env forward every
+# INPUT_* variable their scripts read, the plan/comment step is gated on
+# pr-comment, no step uses continue-on-error (not a documented composite-step
+# key), and setup-python declares no cache (it throws when its dependency
+# glob matches nothing).
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 
 python3 << EOF
@@ -79,30 +82,71 @@ for expected_id in ('dblift', 'plan'):
 
 # --- The dblift step's env forwards every INPUT_* variable run.sh reads -----
 
-expected_input_vars = {
-    'INPUT_COMMAND',
-    'INPUT_ARGS',
-    'INPUT_PACKAGES',
-    'INPUT_VERSION',
-    'INPUT_EXTRAS',
-    'INPUT_WORKING_DIRECTORY',
-    'INPUT_ENV_NAME',
-    'INPUT_INDEX_URL',
-    'INPUT_SUMMARY',
+# scripts/install.sh owns the install; scripts/run.sh no longer reads any of
+# the install inputs. Each step must forward exactly the variables its script
+# reads -- no more, no less.
+expected_env_by_step = {
+    'install': {
+        'INPUT_PACKAGES',
+        'INPUT_VERSION',
+        'INPUT_EXTRAS',
+        'INPUT_INDEX_URL',
+    },
+    'dblift': {
+        'INPUT_COMMAND',
+        'INPUT_ARGS',
+        'INPUT_WORKING_DIRECTORY',
+        'INPUT_ENV_NAME',
+        'INPUT_SUMMARY',
+    },
 }
 
-dblift_step = next((s for s in steps if s.get('id') == 'dblift'), None)
-if dblift_step is None:
-    errors.append("no step has id 'dblift'")
-else:
-    env = dblift_step.get('env', {}) or {}
+for step_id, expected_input_vars in expected_env_by_step.items():
+    step = next((s for s in steps if s.get('id') == step_id), None)
+    if step is None:
+        errors.append(f"no step has id '{step_id}'")
+        continue
+    env = step.get('env', {}) or {}
     actual_input_vars = {k for k in env.keys() if k.startswith('INPUT_')}
     missing = expected_input_vars - actual_input_vars
     extra = actual_input_vars - expected_input_vars
     if missing:
-        errors.append(f"dblift step env is missing: {', '.join(sorted(missing))}")
+        errors.append(f"{step_id} step env is missing: {', '.join(sorted(missing))}")
     if extra:
-        errors.append(f"dblift step env has unexpected INPUT_* vars: {', '.join(sorted(extra))}")
+        errors.append(f"{step_id} step env has unexpected INPUT_* vars: {', '.join(sorted(extra))}")
+
+# --- No step uses continue-on-error -----------------------------------------
+# continue-on-error is not part of the documented schema for a step inside a
+# composite action's runs.steps: depending on the runner it is honoured,
+# ignored, or rejected at manifest load. The plan step absorbs its own
+# failures in its shell body instead, so no step may rely on this key.
+
+for step in steps:
+    if 'continue-on-error' in step:
+        errors.append(
+            f"step '{step.get('name', step.get('id', '?'))}' uses continue-on-error, "
+            f"which is not a documented composite-step key"
+        )
+
+# --- setup-python must not request pip caching -------------------------------
+# actions/setup-python with a 'cache: pip' request and no cache-dependency-path globs
+# **/requirements.txt and THROWS when nothing matches. This repository tracks
+# no pip dependency file, and neither do most calling migration repositories,
+# so the Action would fail at its very first step on a fresh runner.
+
+setup_python_steps = [
+    s for s in steps
+    if isinstance(s.get('uses'), str) and s['uses'].startswith('actions/setup-python@')
+]
+if not setup_python_steps:
+    errors.append("no step uses actions/setup-python")
+for step in setup_python_steps:
+    with_block = step.get('with', {}) or {}
+    if 'cache' in with_block:
+        errors.append(
+            f"setup-python step requests 'cache: {with_block['cache']}'; it throws on a "
+            f"runner where its dependency glob matches nothing"
+        )
 
 # --- The comment step is conditional on inputs.pr-comment == 'true' ---------
 

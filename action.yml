@@ -66,28 +66,25 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
-        cache: pip
 
-    - name: Run dblift
-      id: dblift
+    - name: Install dblift
+      id: install
       shell: bash
       env:
-        INPUT_COMMAND: ${{ inputs.command }}
-        INPUT_ARGS: ${{ inputs.args }}
         INPUT_PACKAGES: ${{ inputs.packages }}
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_EXTRAS: ${{ inputs.extras }}
-        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
-        INPUT_ENV_NAME: ${{ inputs.env-name }}
         INPUT_INDEX_URL: ${{ inputs.index-url }}
-        INPUT_SUMMARY: ${{ inputs.summary }}
-      run: "$GITHUB_ACTION_PATH/scripts/run.sh"
+      run: "$GITHUB_ACTION_PATH/scripts/install.sh"
 
+    # The plan must reflect the state BEFORE anything is applied, so it runs
+    # ahead of the run step. Otherwise `command: check` and `command: migrate`
+    # would always render an empty plan, having already applied the very
+    # migrations they were meant to preview.
     - name: Render migration plan
       id: plan
       if: inputs.pr-comment == 'true'
       shell: bash
-      continue-on-error: true
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_ENV_NAME: ${{ inputs.env-name }}
@@ -95,21 +92,38 @@ runs:
       run: |
         set -euo pipefail
 
-        cd "$INPUT_WORKING_DIRECTORY"
+        dblift_bin="${DBLIFT_BIN:-dblift}"
 
         plan_args=(--log-format json --log-dir "$RUNNER_TEMP" --log-file plan.json migrate --dry-run --show-sql)
         if [ -n "${INPUT_ENV_NAME:-}" ]; then
           plan_args+=(--env "$INPUT_ENV_NAME")
         fi
-        dblift "${plan_args[@]}"
-
-        "$GITHUB_ACTION_PATH/scripts/plan-sql.sh" "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/plan.md"
 
         delimiter="dblift_sql_$$_${RANDOM}"
-        {
-          echo "sql<<${delimiter}"
-          cat "$RUNNER_TEMP/plan.md"
-          echo "${delimiter}"
-        } >> "$GITHUB_OUTPUT"
 
-        "$GITHUB_ACTION_PATH/scripts/comment.sh" "$RUNNER_TEMP/plan.md"
+        # Rendering the plan is a convenience and must never fail the job.
+        # The body is chained with `&&` so the trailing `||` absorbs a failure
+        # at any link: `set -e` cannot be relied on here, because bash disables
+        # errexit for everything on the left of `||` -- including inside
+        # braces, subshells and functions.
+        cd "$INPUT_WORKING_DIRECTORY" &&
+          "$dblift_bin" "${plan_args[@]}" &&
+          "$GITHUB_ACTION_PATH/scripts/plan-sql.sh" "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/plan.md" &&
+          {
+            echo "sql<<${delimiter}"
+            cat "$RUNNER_TEMP/plan.md"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT" &&
+          "$GITHUB_ACTION_PATH/scripts/comment.sh" "$RUNNER_TEMP/plan.md" ||
+          echo "dblift: could not render the migration plan" >&2
+
+    - name: Run dblift
+      id: dblift
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+      run: "$GITHUB_ACTION_PATH/scripts/run.sh"
