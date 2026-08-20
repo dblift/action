@@ -11,6 +11,13 @@
 # each followed by a ```sql fenced block of its statements. Falls back to
 # `script` for the heading when `description` is empty or absent. Emits a
 # single sentence when `.sql` is absent or empty.
+#
+# Each section's fence is sized to be one backtick longer than the longest
+# run of consecutive backticks found in that migration's statements (never
+# shorter than 3), per CommonMark's fenced-code-block rule: a fence is only
+# closed by a run of backticks at least as long as the one that opened it.
+# This defends against SQL content (e.g. a COMMENT or string literal) that
+# itself contains a backtick fence, without needing to escape the SQL.
 set -euo pipefail
 
 log_path="${1:?usage: plan-sql.sh <json-log-path>}"
@@ -26,6 +33,10 @@ jq -r '
   [
     (.sql // [])[]
     | (if ((.description // "") | length) > 0 then .description else .script end) as $heading
-    | "### V\(.version) — \($heading)\n\n```sql\n" + (.statements | join("\n")) + "\n```"
+    | (.statements) as $stmts
+    | ([$stmts[] | [scan("`+")] | map(length) | (max // 0)] | max // 0) as $max_run
+    | ([3, ($max_run + 1)] | max) as $fence_len
+    | ("`" * $fence_len) as $fence
+    | "### V\(.version) — \($heading)\n\n" + $fence + "sql\n" + ($stmts | join("\n")) + "\n" + $fence
   ] | join("\n\n")
 ' "$log_path"

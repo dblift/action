@@ -114,17 +114,69 @@ else
   fi
 fi
 
-# --- Case 5: SQL fence integrity -> even number of fence markers -----------
+# --- Case 5: SQL fence integrity -> a statement containing embedded ```    -
+# and ```` lines must not terminate the fence early. A naive even-marker-
+# count check cannot catch this (a prematurely closed fence plus a stray
+# reopened one still totals an even count), so this instead parses the
+# rendered output the way CommonMark would: find the opening fence line
+# (`+sql), then the first later line composed only of backticks whose
+# length is >= the opening fence's length closes the block. That must be
+# the true end of the statement content, not an embedded backtick line.
 
-fence_count=$(grep -c '^```' "$case1_out")
-if [ "$((fence_count % 2))" -ne 0 ]; then
-  fail "case5: expected an even number of fence markers in case1 output, got $fence_count"
+# Prints the body between the first `...sql opening fence of exactly
+# $2 backticks and the first qualifying closing fence in $1.
+extract_fenced_block() {
+  local file="$1" fence_len="$2"
+  local open_pattern="^\`{${fence_len}}sql\$"
+  local opened=0
+  local line
+  while IFS= read -r line; do
+    if [ "$opened" -eq 0 ]; then
+      if [[ "$line" =~ $open_pattern ]]; then
+        opened=1
+      fi
+      continue
+    fi
+    if [[ "$line" =~ ^\`+$ ]] && [ "${#line}" -ge "$fence_len" ]; then
+      return 0
+    fi
+    printf '%s\n' "$line"
+  done < "$file"
+}
+
+backtick_fixture="$fixtures_dir/plan-backtick-fence.json"
+case5_out="$tmp_root/case5-actual.md"
+bash "$plan_script" "$backtick_fixture" > "$case5_out"
+
+max_run=$(jq -r '[.sql[0].statements[] | [scan("`+")] | map(length) | (max // 0)] | max // 0' "$backtick_fixture")
+opening_line=$(grep -m1 -E '^`{3,}sql$' "$case5_out" || true)
+if [ -z "$opening_line" ]; then
+  fail "case5: expected output to contain an opening sql fence, got: $(cat "$case5_out")"
+else
+  fence_len=$(( ${#opening_line} - 3 ))
+  if [ "$fence_len" -le "$max_run" ]; then
+    fail "case5: expected opening fence ($fence_len backticks) to be longer than the longest backtick run in the content ($max_run), got fence_len=$fence_len max_run=$max_run"
+  fi
+
+  expected_body=$(jq -r '.sql[0].statements | join("\n")' "$backtick_fixture")
+  actual_body=$(extract_fenced_block "$case5_out" "$fence_len")
+  if [ "$actual_body" != "$expected_body" ]; then
+    fail "case5: fenced block content did not match the statement content (fence closed early) -- expected: [$expected_body] got: [$actual_body]"
+  fi
 fi
 
-if [ -f "${case4_out:-}" ]; then
-  fence_count=$(grep -c '^```' "$case4_out")
-  if [ "$((fence_count % 2))" -ne 0 ]; then
-    fail "case5: expected an even number of fence markers in case4 output, got $fence_count"
+# Case 1's ordinary output (no embedded backticks) must still round-trip
+# through the same fence-aware parser.
+case1_max_run=0
+case1_opening_line=$(grep -m1 -E '^`{3,}sql$' "$case1_out" || true)
+if [ -z "$case1_opening_line" ]; then
+  fail "case5: expected case1 output to contain an opening sql fence"
+else
+  case1_fence_len=$(( ${#case1_opening_line} - 3 ))
+  case1_expected_body=$(jq -r '.sql[0].statements | join("\n")' "$fixtures_dir/plan.json")
+  case1_actual_body=$(extract_fenced_block "$case1_out" "$case1_fence_len")
+  if [ "$case1_actual_body" != "$case1_expected_body" ]; then
+    fail "case5: case1 fenced block content did not match the statement content"
   fi
 fi
 
