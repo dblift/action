@@ -94,6 +94,24 @@ fi
 if ! grep -q "issues/7/comments" "$LAST_GH_LOG"; then
   fail "case1: expected the POST to target issues/7/comments (log: $(cat "$LAST_GH_LOG"))"
 fi
+# --- The list call must actually filter on the marker, not just report a --
+# plausible id because $GH_MODE said so. tests/mocks/gh decides its canned
+# response purely from the presence of --jq in argv (see its header); it
+# never evaluates the filter. Without this check, a wrong or missing
+# marker in the jq expression -- which would make the real gh always
+# return an unfiltered .[0] and post a new comment on every push, the
+# exact bug this task exists to prevent -- would not fail any test here.
+list_call_line=$(grep -F -- "--jq" "$LAST_GH_LOG" || true)
+if [ -z "$list_call_line" ]; then
+  fail "case1: expected the list call to be logged with --jq"
+else
+  if ! grep -qF -- "$marker" <<< "$list_call_line"; then
+    fail "case1: expected the list call's jq filter to reference the marker '$marker', got: $list_call_line"
+  fi
+  if ! grep -qF -- "select(.body" <<< "$list_call_line"; then
+    fail "case1: expected the list call's jq filter to select on .body rather than blindly take the first comment, got: $list_call_line"
+  fi
+fi
 # --- Case 3 (part 1): marker present in the posted body ---------------------
 if [ ! -f "$LAST_GH_LOG.body" ]; then
   fail "case1: expected the mock to have captured a posted body"
