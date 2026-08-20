@@ -1,0 +1,122 @@
+name: test
+
+# Pushes are only built on main: an unfiltered `push` trigger would run the
+# whole suite twice for every commit pushed to an open pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dblift
+        run: pip install "dblift"
+
+      - name: Run test suite
+        run: bash tests/run.sh
+
+  action-smoke-postgres:
+    runs-on: ubuntu-latest
+    env:
+      DBLIFT_DB_URL: postgresql+psycopg://dblift:dblift@localhost:5432/dblift
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dblift
+          POSTGRES_PASSWORD: dblift
+          POSTGRES_DB: dblift
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dblift -d dblift"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Copy fixture project outside the repository root
+        run: cp -r tests/fixtures/project-postgres "$RUNNER_TEMP/smoke-project-postgres"
+
+      - name: Run dblift action
+        id: dblift
+        uses: ./
+        with:
+          command: migrate
+          extras: postgresql
+          working-directory: ${{ runner.temp }}/smoke-project-postgres
+
+      - name: Assert pending-count is exactly 0
+        env:
+          PENDING_COUNT: ${{ steps.dblift.outputs.pending-count }}
+        run: |
+          set -euo pipefail
+          if [ "$PENDING_COUNT" != "0" ]; then
+            echo "expected pending-count=0, got '${PENDING_COUNT}'" >&2
+            exit 1
+          fi
+
+  # Regression test for the plan/run ordering. `command: migrate` APPLIES the
+  # fixture's migrations, so the rendered plan is only non-empty if the plan
+  # step ran before the run step, against an already-installed dblift. Render
+  # it afterwards and the dry run sees a fully-migrated database, the plan
+  # collapses to "no pending migrations", and the heading assertion below
+  # fails. A non-destructive command here would pass under either ordering and
+  # prove nothing.
+  action-smoke-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Copy fixture project outside the repository root
+        run: cp -r tests/fixtures/project "$RUNNER_TEMP/smoke-project-plan"
+
+      - name: Run dblift action
+        id: dblift
+        uses: ./
+        with:
+          command: migrate
+          packages: dblift
+          working-directory: ${{ runner.temp }}/smoke-project-plan
+          pr-comment: true
+
+      - name: Assert the rendered plan lists a pending migration
+        env:
+          PLAN_SQL: ${{ steps.dblift.outputs.sql }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PLAN_SQL" ]; then
+            echo "expected a non-empty 'sql' output, got nothing" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$PLAN_SQL" | grep -q '^### V'; then
+            echo "expected the plan to contain a migration heading, got:" >&2
+            printf '%s\n' "$PLAN_SQL" >&2
+            exit 1
+          fi
+
+      - name: Assert pending-count is exactly 0
+        env:
+          PENDING_COUNT: ${{ steps.dblift.outputs.pending-count }}
+        run: |
+          set -euo pipefail
+          if [ "$PENDING_COUNT" != "0" ]; then
+            echo "expected pending-count=0, got '${PENDING_COUNT}'" >&2
+            exit 1
+          fi

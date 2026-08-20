@@ -1,0 +1,142 @@
+name: 'DBLift'
+description: 'Run database migrations and validate migration state in CI'
+author: 'DBLift'
+branding:
+  icon: 'database'
+  color: 'blue'
+inputs:
+  command:
+    description: 'dblift command to run: `migrate`, `validate` or `info`. Required unless `args` is set, which overrides it. Deliberately has no default: the Action never applies migrations unless asked to.'
+    required: false
+  args:
+    description: 'Raw arguments passed to the dblift CLI, split like a shell command line (quotes supported). Overrides `command`. When set, no migration plan is rendered for `pr-comment` and `pending-count` is left empty.'
+    required: false
+    default: ''
+  packages:
+    description: 'Full pip requirement specifiers to install, space-separated. Overrides `version` and `extras`.'
+    required: false
+    default: ''
+  version:
+    description: 'Version of the dblift package to install. Empty installs the latest release.'
+    required: false
+    default: ''
+  extras:
+    description: 'Database driver extra to install. Valid values: `postgresql`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `db2`, `duckdb`, `cosmosdb`, `mongodb`, `redshift`, `snowflake`, `neon`, `supabase`, `aurora-postgresql`, `alloydb`, `yugabytedb`, `timescaledb`, `citus`, `cockroachdb`, `all`.'
+    required: false
+    default: 'postgresql'
+  python-version:
+    description: 'Python version used to run dblift.'
+    required: false
+    default: '3.11'
+  working-directory:
+    description: 'Directory containing the dblift configuration file.'
+    required: false
+    default: '.'
+  env-name:
+    description: 'Environment to select, passed as `--env <name>`.'
+    required: false
+    default: ''
+  index-url:
+    description: 'Alternative pip index URL.'
+    required: false
+    default: ''
+  summary:
+    description: 'Write the result to the GitHub step summary.'
+    required: false
+    default: 'true'
+  pr-comment:
+    description: 'Post the migration plan as a pull request comment.'
+    required: false
+    default: 'false'
+outputs:
+  exit-code:
+    description: 'Exit status returned by the dblift CLI.'
+    value: ${{ steps.dblift.outputs.exit-code }}
+  pending-count:
+    description: 'Number of migrations not yet applied. Empty when `args` is set or the probe fails; both cases are logged.'
+    value: ${{ steps.dblift.outputs.pending-count }}
+  sql:
+    description: 'SQL that a dry run reported it would execute. Only populated when `pr-comment` is `true` and `args` is empty.'
+    value: ${{ steps.plan.outputs.sql }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # Caches pip's HTTP wheel cache, not an environment: the key is
+    # deliberately package-independent so one cache serves every input
+    # combination, and pip re-resolves versions on every run.
+    - name: Cache pip downloads
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: dblift-action-pip-${{ runner.os }}-py${{ inputs.python-version }}
+
+    - name: Install dblift
+      id: install
+      shell: bash
+      env:
+        INPUT_PACKAGES: ${{ inputs.packages }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_EXTRAS: ${{ inputs.extras }}
+        INPUT_INDEX_URL: ${{ inputs.index-url }}
+      run: "$GITHUB_ACTION_PATH/scripts/install.sh"
+
+    # The plan must reflect the state BEFORE anything is applied, so it runs
+    # ahead of the run step. Otherwise `command: migrate` would always render
+    # an empty plan, having already applied the very migrations it was meant
+    # to preview.
+    # The plan is only rendered when the command comes from `command`: with raw
+    # `args` the dry run below cannot replicate flags like --config, and a plan
+    # rendered against the wrong configuration would be posted to the pull
+    # request as if it previewed the real run.
+    - name: Render migration plan
+      id: plan
+      if: inputs.pr-comment == 'true' && inputs.args == ''
+      shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        dblift_bin="${DBLIFT_BIN:-dblift}"
+
+        plan_args=(--log-format json --log-dir "$RUNNER_TEMP" --log-file plan.json migrate --dry-run --show-sql)
+        if [ -n "${INPUT_ENV_NAME:-}" ]; then
+          plan_args+=(--env "$INPUT_ENV_NAME")
+        fi
+
+        delimiter="dblift_sql_$$_${RANDOM}"
+
+        # Rendering the plan is a convenience and must never fail the job.
+        # The body is chained with `&&` so the trailing `||` absorbs a failure
+        # at any link: `set -e` cannot be relied on here, because bash disables
+        # errexit for everything on the left of `||` -- including inside
+        # braces, subshells and functions.
+        cd "$INPUT_WORKING_DIRECTORY" &&
+          "$dblift_bin" "${plan_args[@]}" &&
+          "$GITHUB_ACTION_PATH/scripts/plan-sql.sh" "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/plan.md" &&
+          {
+            echo "sql<<${delimiter}"
+            cat "$RUNNER_TEMP/plan.md"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT" &&
+          "$GITHUB_ACTION_PATH/scripts/comment.sh" "$RUNNER_TEMP/plan.md" ||
+          echo "dblift: could not render the migration plan" >&2
+
+    - name: Run dblift
+      id: dblift
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+      run: "$GITHUB_ACTION_PATH/scripts/run.sh"

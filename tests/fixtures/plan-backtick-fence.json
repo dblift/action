@@ -1,0 +1,16 @@
+{
+  "log_format_version": "1.0",
+  "dblift_version": "3.9.0",
+  "status": "SUCCESS",
+  "show_sql": true,
+  "sql": [
+    {
+      "script": "V3__add_comment.sql",
+      "version": "3",
+      "description": "add_comment",
+      "statements": [
+        "COMMENT ON COLUMN users.notes IS 'example:\n```\nDROP TABLE users;\n````';"
+      ]
+    }
+  ]
+}

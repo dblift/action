@@ -1,0 +1,5 @@
+database:
+  type: sqlite
+  url: "sqlite:///test.db"
+migrations:
+  directories: [migrations]
