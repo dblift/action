@@ -12,6 +12,16 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
 
+# `git ls-files` below runs inside a `while ... done < <(...)` process
+# substitution, whose exit status is invisible to the enclosing loop even
+# under `set -o pipefail` -- a failure there would otherwise be swallowed,
+# leaving `failures` at 0 and reporting a clean scan that never actually
+# ran. Failing loudly here up front closes that hole.
+if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  echo "check-docs.sh: '$repo_root' is not inside a git work tree -- cannot scan tracked files" >&2
+  exit 1
+fi
+
 # Tokens that must never appear in this repository's public-facing docs or
 # in action.yml. Keep the list in one place.
 forbidden_tokens=(

@@ -1,6 +1,6 @@
 # DBLift
 
-Run [dblift](https://dblift.com) database migrations in your CI pipeline.
+Run dblift database migrations in your CI pipeline.
 
 ## Quick start
 

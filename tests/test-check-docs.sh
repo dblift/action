@@ -46,6 +46,33 @@ fi
 cleanup
 trap - EXIT
 
+# --- Case 3: outside a git work tree, the guard must fail loudly rather
+# than silently reporting a clean scan. `git ls-files` failing inside a
+# `while ... done < <(process substitution)` is invisible to
+# `set -euo pipefail`; a non-git directory with a forbidden token in it
+# must not read as "no forbidden tokens found". check-docs.sh has no
+# dependency on the rest of the repository, so copying just the script is
+# enough to reproduce it outside any git work tree -- the trap removes the
+# temp directory even if the test aborts partway.
+
+nogit_dir=$(mktemp -d "${TMPDIR:-/tmp}/check-docs-nogit.XXXXXX")
+
+cleanup_nogit() {
+  rm -rf "$nogit_dir"
+}
+trap cleanup_nogit EXIT
+
+mkdir -p "$nogit_dir/scripts"
+cp "$check_script" "$nogit_dir/scripts/check-docs.sh"
+printf '%s\n' 'Leaks DBLIFT_LICENSE_KEY outside any git work tree.' > "$nogit_dir/leak.md"
+
+if bash "$nogit_dir/scripts/check-docs.sh" > /dev/null 2>&1; then
+  fail "case3: check-docs.sh exited 0 outside a git work tree instead of failing loudly"
+fi
+
+cleanup_nogit
+trap - EXIT
+
 if [ "$failures" -eq 0 ]; then
   echo "test-check-docs.sh: all cases passed"
 fi
