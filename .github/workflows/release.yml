@@ -1,0 +1,58 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dblift
+        run: pip install "dblift"
+
+      - name: Run test suite
+        run: bash tests/run.sh
+
+  retag:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Derive major version tag
+        id: major
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "release tag '${RELEASE_TAG}' does not look like a version (expected vX.Y.Z or X.Y.Z)" >&2
+            exit 1
+          fi
+
+          major="${version%%.*}"
+          echo "major_tag=v${major}" >> "$GITHUB_OUTPUT"
+
+      - name: Force-update and push the major tag
+        env:
+          MAJOR_TAG: ${{ steps.major.outputs.major_tag }}
+        run: |
+          set -euo pipefail
+
+          git tag -f "$MAJOR_TAG" "$GITHUB_SHA"
+          git push origin "$MAJOR_TAG" --force
