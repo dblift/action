@@ -58,7 +58,58 @@ outputs:
     value: ${{ steps.dblift.outputs.pending-count }}
   sql:
     description: 'SQL that a dry run reported it would execute.'
-    value: ${{ steps.dblift.outputs.sql }}
+    value: ${{ steps.plan.outputs.sql }}
 runs:
   using: 'composite'
-  steps: []
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+
+    - name: Run dblift
+      id: dblift
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_PACKAGES: ${{ inputs.packages }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_EXTRAS: ${{ inputs.extras }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_INDEX_URL: ${{ inputs.index-url }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+      run: "$GITHUB_ACTION_PATH/scripts/run.sh"
+
+    - name: Render migration plan
+      id: plan
+      if: inputs.pr-comment == 'true'
+      shell: bash
+      continue-on-error: true
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_ENV_NAME: ${{ inputs.env-name }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        cd "$INPUT_WORKING_DIRECTORY"
+
+        plan_args=(--log-format json --log-dir "$RUNNER_TEMP" --log-file plan.json migrate --dry-run --show-sql)
+        if [ -n "${INPUT_ENV_NAME:-}" ]; then
+          plan_args+=(--env "$INPUT_ENV_NAME")
+        fi
+        dblift "${plan_args[@]}"
+
+        "$GITHUB_ACTION_PATH/scripts/plan-sql.sh" "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/plan.md"
+
+        delimiter="dblift_sql_$$_${RANDOM}"
+        {
+          echo "sql<<${delimiter}"
+          cat "$RUNNER_TEMP/plan.md"
+          echo "${delimiter}"
+        } >> "$GITHUB_OUTPUT"
+
+        "$GITHUB_ACTION_PATH/scripts/comment.sh" "$RUNNER_TEMP/plan.md"

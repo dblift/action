@@ -100,10 +100,15 @@ if actual_output_names != expected_outputs:
         sys.exit(1)
 
 # Verify output values reference the correct step with matching field name
+expected_output_steps = {
+    'exit-code': 'dblift',
+    'pending-count': 'dblift',
+    'sql': 'plan',
+}
 for output_name in expected_outputs:
     output = outputs[output_name]
     value = output.get('value', '')
-    expected_ref = f'steps.dblift.outputs.{output_name}'
+    expected_ref = f'steps.{expected_output_steps[output_name]}.outputs.{output_name}'
     if expected_ref not in value:
         print(
             f"ERROR: output '{output_name}' value does not contain '{expected_ref}' (got: {value})",
