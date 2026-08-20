@@ -1,8 +1,9 @@
 #!/bin/bash
 # Run the requested dblift command and report the result.
 #
-# INPUT_ARGS, when non-empty, is passed to dblift verbatim and INPUT_COMMAND is
-# ignored. Otherwise INPUT_COMMAND must name one of migrate, validate or info.
+# INPUT_ARGS, when non-empty, is split like a shell command line (quotes
+# supported) and passed to dblift; INPUT_COMMAND is then ignored. Otherwise
+# INPUT_COMMAND must name one of migrate, validate or info.
 # There is no default and no composite pipeline: with neither set, this script
 # exits 2 rather than guessing at a command that might apply migrations.
 #
@@ -19,6 +20,22 @@
 set -euo pipefail
 
 dblift_bin="${DBLIFT_BIN:-dblift}"
+
+# The exit-code and pending-count outputs are part of the Action's contract on
+# every path, including the early failures below (bad working-directory, no
+# command). Without this trap, `continue-on-error: true` consumers would read
+# an empty string instead of a status exactly on the paths where they need it.
+outputs_written=0
+write_outputs_on_exit() {
+  local status=$?
+  if [ "$outputs_written" -eq 0 ]; then
+    {
+      echo "exit-code=${status}"
+      echo "pending-count="
+    } >> "$GITHUB_OUTPUT"
+  fi
+}
+trap write_outputs_on_exit EXIT
 
 # --- 1. Move into the working directory --------------------------------------
 
@@ -45,14 +62,35 @@ ${cmd[*]}"
     ran_commands="${cmd[*]}"
   fi
 
+  # --log-dir routes dblift's own log file into the runner temp directory.
+  # The CLI defaults to a relative ./logs, which would leave a stray
+  # directory inside the caller's checkout on every run. It is inserted at
+  # invocation time so the step summary shows the command the user asked for.
   set +e
-  "${cmd[@]}" 2>&1 | tee -a "$capture_file"
+  "${cmd[0]}" --log-dir "$RUNNER_TEMP/dblift-logs" "${cmd[@]:1}" 2>&1 | tee -a "$capture_file"
   exit_code="${PIPESTATUS[0]}"
   set -e
 }
 
+# Shell-style tokenization: quoted arguments (e.g. --description "add users
+# table") and multi-line values survive intact, and an unbalanced quote fails
+# loudly instead of silently corrupting the command line. python3 is guaranteed
+# by the setup-python step that precedes this script.
 extra_args=()
-read -ra extra_args <<< "${INPUT_ARGS:-}"
+if [ -n "${INPUT_ARGS:-}" ]; then
+  if ! parsed_args=$(printf '%s' "$INPUT_ARGS" | python3 -c '
+import shlex, sys
+print("\n".join(shlex.split(sys.stdin.read())))
+'); then
+    echo "run.sh: could not parse 'args' (unbalanced quote?): ${INPUT_ARGS}" >&2
+    exit 2
+  fi
+  if [ -n "$parsed_args" ]; then
+    while IFS= read -r arg_token; do
+      extra_args+=("$arg_token")
+    done <<< "$parsed_args"
+  fi
+fi
 
 if [ "${#extra_args[@]}" -gt 0 ]; then
   run_dblift "${extra_args[@]}"
@@ -79,16 +117,28 @@ else
 fi
 
 # --- 4. Compute pending-count, independently of the run above ---------------
+# The probe rebuilds its own `dblift info` command from the working directory
+# and --env alone, so it is only run when the command came from INPUT_COMMAND:
+# with raw `args` the probe cannot replicate flags like --config and would
+# silently count against the wrong project. In that case pending-count stays
+# empty, which the docs state. Probe failures are reported to stderr rather
+# than swallowed -- an empty pending-count must be diagnosable from the log.
 
 pending_count=""
 
-probe_cmd=("$dblift_bin" info --format json)
-if [ -n "${INPUT_ENV_NAME:-}" ]; then
-  probe_cmd+=(--env "$INPUT_ENV_NAME")
-fi
+if [ "${#extra_args[@]}" -gt 0 ]; then
+  echo "run.sh: pending-count is not computed when 'args' is set (the probe cannot replicate raw arguments)" >&2
+else
+  probe_cmd=("$dblift_bin" --log-dir "$RUNNER_TEMP/dblift-logs" info --format json)
+  if [ -n "${INPUT_ENV_NAME:-}" ]; then
+    probe_cmd+=(--env "$INPUT_ENV_NAME")
+  fi
 
-if info_json=$("${probe_cmd[@]}"); then
-  if parsed=$(printf '%s' "$info_json" | jq '[.migrations[] | select(.status == "PENDING")] | length' 2>/dev/null); then
+  if ! info_json=$("${probe_cmd[@]}"); then
+    echo "run.sh: pending-count probe failed: 'dblift info --format json' exited non-zero" >&2
+  elif ! parsed=$(printf '%s' "$info_json" | jq '[.migrations[] | select(.status == "PENDING")] | length' 2>&1); then
+    echo "run.sh: pending-count probe failed: could not parse 'dblift info' output as JSON: $parsed" >&2
+  else
     pending_count="$parsed"
   fi
 fi
@@ -99,6 +149,7 @@ fi
   echo "exit-code=${exit_code}"
   echo "pending-count=${pending_count}"
 } >> "$GITHUB_OUTPUT"
+outputs_written=1
 
 # --- 6. Write the step summary -----------------------------------------------
 

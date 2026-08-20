@@ -21,23 +21,13 @@ fail() {
   failures=$((failures + 1))
 }
 
+# The canonical SQLite fixture project lives in tests/fixtures/project (the
+# same one the smoke jobs consume); copying it instead of re-declaring it here
+# keeps a schema change from silently testing a different project.
 setup_fixture() {
   local dir="$1"
-  mkdir -p "$dir/migrations"
-  cat > "$dir/migrations/V1__create_users.sql" <<'SQL'
-CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);
-SQL
-  cat > "$dir/migrations/V2__add_index.sql" <<'SQL'
-CREATE INDEX idx_users_email ON users(email);
-ALTER TABLE users ADD COLUMN name TEXT;
-SQL
-  cat > "$dir/dblift.yml" <<'YAML'
-database:
-  type: sqlite
-  url: "sqlite:///test.db"
-migrations:
-  directories: [migrations]
-YAML
+  mkdir -p "$dir"
+  cp -r "$repo_root/tests/fixtures/project/." "$dir/"
 }
 
 run_counter=0
@@ -105,6 +95,12 @@ fi
 stray=$(find "$case1_dir" -name 'dblift-run-output.log' -print 2>/dev/null)
 if [ -n "$stray" ]; then
   fail "case1: run.sh wrote its output capture into the working directory: $stray"
+fi
+
+# dblift's own file log defaults to a relative ./logs; run.sh must reroute it
+# under $RUNNER_TEMP so nothing lands in the caller's checkout.
+if [ -d "$case1_dir/logs" ]; then
+  fail "case1: dblift wrote a logs/ directory into the working directory"
 fi
 
 # The step summary must report the command, exit status, pending count and
@@ -194,8 +190,18 @@ for expected in migrate validate info args; do
   fi
 done
 
+# The exit-code output is part of the contract on every path: a consumer
+# following the README's continue-on-error recipe must read the status even
+# when the script bailed before running dblift.
+exit_code_out=$(get_output "$LAST_OUTPUT_FILE" exit-code)
+if [ "$exit_code_out" != "2" ]; then
+  fail "case4c: expected the exit-code output to be written as 2 on the early-exit path, got '$exit_code_out'"
+fi
+
 # --- Case 4d: no command but args set -> runs normally ---------------------
-# args-only usage is exactly why `command` cannot be marked required.
+# args-only usage is exactly why `command` cannot be marked required. The
+# pending-count probe is skipped in args mode (it cannot replicate raw
+# arguments), so the output must be empty and the skip must be logged.
 
 run_case "$case4_dir" "" "info"
 
@@ -203,8 +209,11 @@ if [ "$LAST_EXIT" -ne 0 ]; then
   fail "case4d: args-only usage must run without a command, got exit $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
 fi
 pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
-if [ "$pending" != "2" ]; then
-  fail "case4d: expected pending-count=2, got '$pending'"
+if [ "$pending" != "" ]; then
+  fail "case4d: expected pending-count to be empty in args mode, got '$pending'"
+fi
+if ! grep -q "pending-count is not computed" "$LAST_STDERR_FILE"; then
+  fail "case4d: expected stderr to explain the skipped probe (stderr: $(cat "$LAST_STDERR_FILE"))"
 fi
 
 # --- Case 5: args overrides command -> JSON on stdout, no migration applied
@@ -219,15 +228,19 @@ fi
 if ! awk '/^\{$/,0' "$LAST_STDOUT_FILE" | jq -e '.migrations' > /dev/null 2>&1; then
   fail "case5: expected valid JSON with a migrations field on stdout"
 fi
+# pending-count is empty in args mode, so prove nothing was applied with a
+# follow-up command-mode run against the same fixture.
+run_case "$case5_dir" info ""
 pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
 if [ "$pending" != "2" ]; then
   fail "case5: expected pending-count=2 (no migration applied), got '$pending'"
 fi
 
 # --- Case 6: whitespace-only args -> falls through to command dispatch -----
-# Regression test: `read -ra` on whitespace-only input yields a zero-element
-# array; expanding that under `set -u` on bash 3.2 (the macOS-runner version)
-# aborts with "unbound variable" unless the empty-result case is handled.
+# Tokenizing whitespace-only input yields zero arguments; expanding an empty
+# array under `set -u` on bash 3.2 (the macOS-runner version) aborts with
+# "unbound variable" unless the empty-result case is handled, and the script
+# must fall back to command dispatch rather than invoking dblift bare.
 
 case6_dir="$tmp_root/case6"
 setup_fixture "$case6_dir"
@@ -252,12 +265,17 @@ cat > "$stderr_stub" <<'STUB'
 #!/bin/bash
 echo "DBLIFT_STDERR_MARKER_7f3a" >&2
 # The pending-count probe calls `info --format json`; answer it with a
-# well-formed payload so the probe stays on its normal path.
-if [ "${1:-}" = "info" ]; then
-  echo '{'
-  echo '  "migrations": [{"version": "1", "status": "PENDING"}]'
-  echo '}'
-fi
+# well-formed payload so the probe stays on its normal path. The subcommand
+# is scanned for rather than read from $1: run.sh prepends global flags
+# (--log-dir) ahead of it.
+for arg in "$@"; do
+  if [ "$arg" = "info" ]; then
+    echo '{'
+    echo '  "migrations": [{"version": "1", "status": "PENDING"}]'
+    echo '}'
+    break
+  fi
+done
 STUB
 chmod +x "$stderr_stub"
 
@@ -287,12 +305,16 @@ fi
 fence_stub="$tmp_root/dblift-fence-stub.sh"
 cat > "$fence_stub" <<'STUB'
 #!/bin/bash
-if [ "${1:-}" = "info" ]; then
-  echo '{'
-  echo '  "migrations": []'
-  echo '}'
-  exit 0
-fi
+# The subcommand is scanned for rather than read from $1: run.sh prepends
+# global flags (--log-dir) ahead of it.
+for arg in "$@"; do
+  if [ "$arg" = "info" ]; then
+    echo '{'
+    echo '  "migrations": []'
+    echo '}'
+    exit 0
+  fi
+done
 echo 'before the fence'
 echo '````'
 echo 'after the fence'
@@ -322,6 +344,45 @@ for line in 'before the fence' 'after the fence'; do
     fail "case8: expected '$line' in the step summary"
   fi
 done
+
+# --- Case 9: args is split like a shell command line ------------------------
+# A quoted argument containing spaces must reach dblift as one token, with
+# the quote characters stripped. The recording stub writes each argument on
+# its own line under $RUNNER_TEMP, where run_case already points RUNNER_TEMP.
+
+argv_stub="$tmp_root/dblift-argv-stub.sh"
+cat > "$argv_stub" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$@" > "$RUNNER_TEMP/dblift-argv.log"
+STUB
+chmod +x "$argv_stub"
+
+case9_dir="$tmp_root/case9"
+setup_fixture "$case9_dir"
+run_case "$case9_dir" "" 'migrate --description "add users table"' "$argv_stub"
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case9: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+if ! grep -qxF -- 'add users table' "$LAST_RUNNER_TEMP/dblift-argv.log"; then
+  fail "case9: expected 'add users table' to reach dblift as a single unquoted token (argv: $(tr '\n' '|' < "$LAST_RUNNER_TEMP/dblift-argv.log"))"
+fi
+if grep -qF -- '"' "$LAST_RUNNER_TEMP/dblift-argv.log"; then
+  fail "case9: quote characters leaked into dblift's argv (argv: $(tr '\n' '|' < "$LAST_RUNNER_TEMP/dblift-argv.log"))"
+fi
+
+# --- Case 9b: an unbalanced quote in args fails loudly ----------------------
+# Silent corruption of the command line is the failure mode being replaced;
+# a parse error must exit 2 before dblift is ever invoked.
+
+run_case "$case9_dir" "" 'migrate --description "unbalanced' "$argv_stub"
+
+if [ "$LAST_EXIT" -ne 2 ]; then
+  fail "case9b: expected exit 2 on an unbalanced quote in args, got $LAST_EXIT"
+fi
+if ! grep -q "could not parse 'args'" "$LAST_STDERR_FILE"; then
+  fail "case9b: expected stderr to explain the parse failure (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
 
 if [ "$failures" -eq 0 ]; then
   echo "test-run.sh: all cases passed"
