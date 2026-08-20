@@ -45,6 +45,7 @@ small_body_file="$tmp_root/small-body.md"
 run_counter=0
 run_comment() {
   local body_file="$1" event_file="$2" repo="$3" gh_bin="$4" gh_mode="$5"
+  local summary_input="${6:-true}"
   run_counter=$((run_counter + 1))
 
   local runner_temp="$tmp_root/runner-temp-$run_counter"
@@ -66,6 +67,7 @@ run_comment() {
     GH_BIN="$gh_bin" \
     GH_LOG="$LAST_GH_LOG" \
     GH_MODE="$gh_mode" \
+    INPUT_SUMMARY="$summary_input" \
     bash "$comment_script" "$body_file" >"$LAST_STDOUT_FILE" 2>"$LAST_STDERR_FILE"
   LAST_EXIT=$?
   set -e
@@ -110,6 +112,12 @@ else
   fi
   if ! grep -qF -- "select(.body" <<< "$list_call_line"; then
     fail "case1: expected the list call's jq filter to select on .body rather than blindly take the first comment, got: $list_call_line"
+  fi
+  # Without --slurp, `gh api --paginate --jq` evaluates the filter once per
+  # page and a marker comment beyond page 1 yields a multiline id that breaks
+  # the PATCH URL.
+  if ! grep -qF -- "--slurp" <<< "$list_call_line"; then
+    fail "case1: expected the list call to pass --slurp so pagination yields a single id, got: $list_call_line"
   fi
 fi
 # --- Case 3 (part 1): marker present in the posted body ---------------------
@@ -287,6 +295,22 @@ else
   if [[ ! "$closing_line" =~ ^\`{5,}$ ]]; then
     fail "case8: expected a closing fence of at least 5 backticks, got '$closing_line'"
   fi
+fi
+
+# --- Case 9: summary disabled -> the fallback stays silent ------------------
+# `summary: 'false'` means the user opted out of having the plan on the job
+# page; a fallback path (here: a failing gh) must not override that.
+
+run_comment "$small_body_file" "$pr_event_file" "octocat/dblift-action-test" "$mock_gh" "fail" "false"
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case9: expected exit 0, got $LAST_EXIT"
+fi
+if [ -s "$LAST_SUMMARY_FILE" ]; then
+  fail "case9: expected the step summary to stay empty with summary disabled, got: $(cat "$LAST_SUMMARY_FILE")"
+fi
+if ! grep -q "gh api failed" "$LAST_STDERR_FILE"; then
+  fail "case9: expected stderr to still explain the gh failure, got: $(cat "$LAST_STDERR_FILE")"
 fi
 
 if [ "$failures" -eq 0 ]; then

@@ -5,7 +5,8 @@
 # Usage: comment.sh <markdown-file>
 #
 # Reads GITHUB_REPOSITORY, GITHUB_EVENT_PATH, GITHUB_STEP_SUMMARY and
-# RUNNER_TEMP from the environment (as set by the runner), and needs an
+# RUNNER_TEMP from the environment (as set by the runner), INPUT_SUMMARY (as
+# set by the composite action from its `summary` input), and needs an
 # authentication token exported for `gh`. action.yml supplies that as GH_TOKEN;
 # this script never reads the token itself, it only relies on `gh` picking it
 # up from the environment.
@@ -38,12 +39,15 @@ trap 'rm -f "$marked_file" "$api_body_file"' EXIT
 } > "$marked_file"
 
 # Writes the marker-prefixed body to the step summary (if configured) and
-# exits 0. $1, if non-empty, is logged to stderr first.
+# exits 0. $1, if non-empty, is logged to stderr first. The summary fallback
+# honours the Action's `summary` input (INPUT_SUMMARY): a user who disabled
+# the step summary opted out of having the SQL plan on the job page, and a
+# fallback path must not override that.
 fall_back_to_summary() {
   if [ -n "${1:-}" ]; then
     echo "$1" >&2
   fi
-  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  if [ "${INPUT_SUMMARY:-true}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     cat "$marked_file" >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -118,8 +122,13 @@ fi
 
 repo="$GITHUB_REPOSITORY"
 
-if ! list_output=$("$gh_bin" api "repos/$repo/issues/$pr_number/comments" --paginate \
-      --jq 'map(select(.body | contains("<!-- dblift-action -->"))) | .[0].id // empty' 2>&1); then
+# --slurp collects every page into one array before the jq filter runs.
+# Without it, `--paginate --jq` evaluates the filter once per page, and marker
+# comments on two pages would yield a multiline id that breaks the PATCH URL.
+# The marker is interpolated from the single $marker definition above so the
+# lookup can never drift from the bodies being written.
+if ! list_output=$("$gh_bin" api "repos/$repo/issues/$pr_number/comments?per_page=100" --paginate --slurp \
+      --jq "add | map(select(.body | contains(\"$marker\"))) | .[0].id // empty" 2>&1); then
   fall_back_to_summary "comment.sh: gh api failed while listing comments: $list_output"
 fi
 comment_id="$list_output"

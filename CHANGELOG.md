@@ -22,9 +22,11 @@ Semantic Versioning.
   Python that dblift runs on.
 - `exit-code` and `pending-count` outputs, and an optional GitHub step
   summary (`summary` input) reporting the command run, its exit status and
-  its output.
+  its output. `exit-code` is written on every path, including early failures;
+  `pending-count` is left empty (with a logged reason) when `args` is set or
+  the probe fails.
 - `sql` output carrying the rendered dry-run migration plan, populated when
-  `pr-comment` is enabled.
+  `pr-comment` is enabled and `args` is not set.
 - `pr-comment` input to render a dry-run migration plan and post it as a
   sticky pull request comment, updated in place on each push; falls back to
   the step summary when the token cannot post (e.g. pull requests from

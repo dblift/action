@@ -9,7 +9,7 @@ inputs:
     description: 'dblift command to run: `migrate`, `validate` or `info`. Required unless `args` is set, which overrides it. Deliberately has no default: the Action never applies migrations unless asked to.'
     required: false
   args:
-    description: 'Raw arguments passed to the dblift CLI. Overrides `command`.'
+    description: 'Raw arguments passed to the dblift CLI, split like a shell command line (quotes supported). Overrides `command`. When set, no migration plan is rendered for `pr-comment` and `pending-count` is left empty.'
     required: false
     default: ''
   packages:
@@ -53,10 +53,10 @@ outputs:
     description: 'Exit status returned by the dblift CLI.'
     value: ${{ steps.dblift.outputs.exit-code }}
   pending-count:
-    description: 'Number of migrations not yet applied.'
+    description: 'Number of migrations not yet applied. Empty when `args` is set or the probe fails; both cases are logged.'
     value: ${{ steps.dblift.outputs.pending-count }}
   sql:
-    description: 'SQL that a dry run reported it would execute.'
+    description: 'SQL that a dry run reported it would execute. Only populated when `pr-comment` is `true` and `args` is empty.'
     value: ${{ steps.plan.outputs.sql }}
 runs:
   using: 'composite'
@@ -65,6 +65,15 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
+
+    # Caches pip's HTTP wheel cache, not an environment: the key is
+    # deliberately package-independent so one cache serves every input
+    # combination, and pip re-resolves versions on every run.
+    - name: Cache pip downloads
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: dblift-action-pip-${{ runner.os }}-py${{ inputs.python-version }}
 
     - name: Install dblift
       id: install
@@ -80,13 +89,18 @@ runs:
     # ahead of the run step. Otherwise `command: migrate` would always render
     # an empty plan, having already applied the very migrations it was meant
     # to preview.
+    # The plan is only rendered when the command comes from `command`: with raw
+    # `args` the dry run below cannot replicate flags like --config, and a plan
+    # rendered against the wrong configuration would be posted to the pull
+    # request as if it previewed the real run.
     - name: Render migration plan
       id: plan
-      if: inputs.pr-comment == 'true'
+      if: inputs.pr-comment == 'true' && inputs.args == ''
       shell: bash
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail

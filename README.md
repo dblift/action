@@ -44,7 +44,7 @@ broken ordering fails the job rather than being written to the database.
 | Name                | Description                                                                                                    | Default      |
 | -------------------- | --------------------------------------------------------------------------------------------------------------- | ------------- |
 | `command`            | dblift command to run: `migrate`, `validate` or `info`. Ignored when `args` is set. | *(none — set this or `args`)* |
-| `args`               | Raw arguments passed to the dblift CLI. Overrides `command`. Whitespace-split, so it cannot carry a quoted argument containing spaces. | *(empty)*     |
+| `args`               | Raw arguments passed to the dblift CLI, split like a shell command line (quotes supported). Overrides `command`. When set, no migration plan is rendered for `pr-comment` and `pending-count` is left empty. | *(empty)*     |
 | `packages`           | Full pip requirement specifiers to install, space-separated. Overrides `version` and `extras`.                  | *(empty)*     |
 | `version`            | Version of the dblift package to install. Empty installs the latest release.                                   | *(empty)*     |
 | `extras`             | Database driver extra to install. Valid values: `postgresql`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `db2`, `duckdb`, `cosmosdb`, `mongodb`, `redshift`, `snowflake`, `neon`, `supabase`, `aurora-postgresql`, `alloydb`, `yugabytedb`, `timescaledb`, `citus`, `cockroachdb`, `all`. | `postgresql`  |
@@ -59,9 +59,9 @@ broken ordering fails the job rather than being written to the database.
 
 | Name             | Description                                        |
 | ----------------- | ----------------------------------------------------- |
-| `exit-code`       | Exit status returned by the dblift CLI.               |
-| `pending-count`   | Number of migrations not yet applied.                 |
-| `sql`             | SQL that a dry run reported it would execute. Populated when `pr-comment` is enabled. |
+| `exit-code`       | Exit status returned by the dblift CLI, or the script's own status when dblift never ran. |
+| `pending-count`   | Number of migrations not yet applied. Empty when `args` is set or the probe fails; both cases are logged. |
+| `sql`             | SQL that a dry run reported it would execute. Populated when `pr-comment` is enabled and `args` is empty. |
 
 Reading `exit-code` requires `continue-on-error: true` on the step that calls
 this Action. The Action exits with dblift's exit status, so without it a
@@ -122,10 +122,12 @@ which goes on to apply them.
 ```yaml
 - uses: dblift/action@v1
   with:
-    args: 'baseline --version 3'
+    args: 'baseline --baseline-version 3'
 ```
 
-`args` is a raw passthrough to the dblift CLI and overrides `command`.
+`args` is a raw passthrough to the dblift CLI and overrides `command`. It is
+split like a shell command line, so quoted values containing spaces survive
+intact.
 
 ## How it works
 

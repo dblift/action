@@ -164,10 +164,11 @@ if comment_step is None:
 else:
     condition = comment_step.get('if', '')
     normalized = ''.join(condition.split())
-    if normalized != "inputs.pr-comment=='true'":
+    if normalized != "inputs.pr-comment=='true'&&inputs.args==''":
         errors.append(
             f"comment step 'if' is '{condition}', expected it to gate on "
-            f"inputs.pr-comment == 'true'"
+            f"inputs.pr-comment == 'true' && inputs.args == '' (with raw args "
+            f"the dry run cannot replicate the real invocation)"
         )
 
 # --- Step order: setup-python, then install, then plan, then run ------------
