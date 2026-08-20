@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-20
+
 ### Added
 
 - Composite GitHub Action that installs the `dblift` Python package and runs
