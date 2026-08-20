@@ -38,7 +38,7 @@ jobs:
         id: dblift
         uses: ./
         with:
-          command: check
+          command: migrate
           packages: dblift
           working-directory: ${{ runner.temp }}/smoke-project
 
@@ -81,7 +81,7 @@ jobs:
         id: dblift
         uses: ./
         with:
-          command: check
+          command: migrate
           extras: postgresql
           working-directory: ${{ runner.temp }}/smoke-project-postgres
 

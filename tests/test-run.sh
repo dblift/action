@@ -81,11 +81,13 @@ get_output() {
   grep "^${key}=" "$file" | tail -n1 | cut -d= -f2-
 }
 
-# --- Case 1: clean history -> check succeeds, pending-count is 0 -----------
+# --- Case 1: clean history -> migrate succeeds, pending-count is 0 ---------
+# dblift's own migrate runs a validation pre-flight and aborts on a bad
+# checksum or ordering, so applying to an ephemeral CI database IS the check.
 
 case1_dir="$tmp_root/case1"
 setup_fixture "$case1_dir"
-run_case "$case1_dir" check ""
+run_case "$case1_dir" migrate ""
 
 if [ "$LAST_EXIT" -ne 0 ]; then
   fail "case1: expected exit 0, got $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
@@ -152,11 +154,58 @@ run_case "$case4_dir" bogus ""
 if [ "$LAST_EXIT" -eq 0 ]; then
   fail "case4: expected non-zero exit, got 0"
 fi
-for value in migrate validate info check; do
+for value in migrate validate info; do
   if ! grep -q "$value" "$LAST_STDERR_FILE"; then
     fail "case4: expected stderr to mention '$value' (stderr: $(cat "$LAST_STDERR_FILE"))"
   fi
 done
+
+# --- Case 4b: the removed `check` alias is now rejected like any unknown ----
+# `check` ran migrate, then validate, then info. dblift's migrate already
+# validates as a pre-flight, and pending-count is computed from this script's
+# own `info --format json` probe regardless of the command, so every step
+# after the first was redundant. It must not silently keep working.
+
+run_case "$case4_dir" check ""
+
+if [ "$LAST_EXIT" -ne 2 ]; then
+  fail "case4b: expected the removed 'check' alias to be rejected with exit 2, got $LAST_EXIT"
+fi
+if ! grep -q 'unknown command' "$LAST_STDERR_FILE"; then
+  fail "case4b: expected 'check' to be reported as an unknown command (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+if grep -q "valid values:.*check" "$LAST_STDERR_FILE"; then
+  fail "case4b: 'check' is still advertised as a valid value (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+
+# --- Case 4c: no command and no args -> exit 2 naming both ways out --------
+# `command` has no default, so the Action never applies migrations the caller
+# did not ask for. Because args-only usage is valid, this cannot be enforced
+# by making the input required; it is enforced here instead.
+
+run_case "$case4_dir" "" ""
+
+if [ "$LAST_EXIT" -ne 2 ]; then
+  fail "case4c: expected exit 2 when neither command nor args is set, got $LAST_EXIT"
+fi
+for expected in migrate validate info args; do
+  if ! grep -q "$expected" "$LAST_STDERR_FILE"; then
+    fail "case4c: expected stderr to mention '$expected' (stderr: $(cat "$LAST_STDERR_FILE"))"
+  fi
+done
+
+# --- Case 4d: no command but args set -> runs normally ---------------------
+# args-only usage is exactly why `command` cannot be marked required.
+
+run_case "$case4_dir" "" "info"
+
+if [ "$LAST_EXIT" -ne 0 ]; then
+  fail "case4d: args-only usage must run without a command, got exit $LAST_EXIT (stderr: $(cat "$LAST_STDERR_FILE"))"
+fi
+pending=$(get_output "$LAST_OUTPUT_FILE" pending-count)
+if [ "$pending" != "2" ]; then
+  fail "case4d: expected pending-count=2, got '$pending'"
+fi
 
 # --- Case 5: args overrides command -> JSON on stdout, no migration applied
 

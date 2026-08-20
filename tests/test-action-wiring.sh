@@ -172,7 +172,7 @@ else:
 
 # --- Step order: setup-python, then install, then plan, then run ------------
 # The plan must be rendered BEFORE the run step applies anything, or a
-# dry-run preview of "check" or "migrate" reports an empty plan every time
+# dry-run preview of "migrate" reports an empty plan every time
 # because those commands have already applied the migrations being previewed.
 # Both of those in turn need dblift installed, so install comes first.
 

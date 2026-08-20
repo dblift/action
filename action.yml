@@ -6,9 +6,8 @@ branding:
   color: 'blue'
 inputs:
   command:
-    description: 'Shortcut pipeline: `check`, `migrate`, `validate` or `info`. Ignored when `args` is set.'
+    description: 'dblift command to run: `migrate`, `validate` or `info`. Required unless `args` is set, which overrides it. Deliberately has no default: the Action never applies migrations unless asked to.'
     required: false
-    default: 'check'
   args:
     description: 'Raw arguments passed to the dblift CLI. Overrides `command`.'
     required: false
@@ -78,9 +77,9 @@ runs:
       run: "$GITHUB_ACTION_PATH/scripts/install.sh"
 
     # The plan must reflect the state BEFORE anything is applied, so it runs
-    # ahead of the run step. Otherwise `command: check` and `command: migrate`
-    # would always render an empty plan, having already applied the very
-    # migrations they were meant to preview.
+    # ahead of the run step. Otherwise `command: migrate` would always render
+    # an empty plan, having already applied the very migrations it was meant
+    # to preview.
     - name: Render migration plan
       id: plan
       if: inputs.pr-comment == 'true'

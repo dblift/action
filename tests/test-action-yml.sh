@@ -20,9 +20,11 @@ repo_root = "${repo_root}"
 with open(f"{repo_root}/action.yml") as f:
     action = yaml.safe_load(f)
 
-# Expected inputs with their defaults
+# Expected inputs with their defaults. 'command' maps to None: it must
+# declare no default at all, so the Action never runs a destructive command
+# the caller did not name.
 expected_inputs = {
-    'command': 'check',
+    'command': None,
     'args': '',
     'packages': '',
     'version': '',

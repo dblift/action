@@ -31,18 +31,19 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dblift/action@v1
         with:
-          command: check
+          command: migrate
           extras: postgresql
 ```
 
-`command: check` runs `migrate`, then `validate`, then `info` against the
-ephemeral Postgres service above.
+Applying the migrations to the ephemeral Postgres service above *is* the
+check: dblift's `migrate` validates before it applies, so a bad checksum or a
+broken ordering fails the job rather than being written to the database.
 
 ## Inputs
 
 | Name                | Description                                                                                                    | Default      |
 | -------------------- | --------------------------------------------------------------------------------------------------------------- | ------------- |
-| `command`            | Shortcut pipeline: `check`, `migrate`, `validate` or `info`. Ignored when `args` is set.                        | `check`       |
+| `command`            | dblift command to run: `migrate`, `validate` or `info`. Ignored when `args` is set. | *(none — set this or `args`)* |
 | `args`               | Raw arguments passed to the dblift CLI. Overrides `command`. Whitespace-split, so it cannot carry a quoted argument containing spaces. | *(empty)*     |
 | `packages`           | Full pip requirement specifiers to install, space-separated. Overrides `version` and `extras`.                  | *(empty)*     |
 | `version`            | Version of the dblift package to install. Empty installs the latest release.                                   | *(empty)*     |
@@ -102,7 +103,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dblift/action@v1
         with:
-          command: check
+          command: migrate
           pr-comment: true
 ```
 
@@ -113,8 +114,8 @@ to the job's step summary instead. Rendering and posting the plan absorbs its
 own failures, so it never fails the job.
 
 The plan is rendered before the command runs, so it reports the migrations
-that are pending at the start of the job — including for `command: check` and
-`command: migrate`, which go on to apply them.
+that are pending at the start of the job — including for `command: migrate`,
+which goes on to apply them.
 
 ### Passing raw arguments
 

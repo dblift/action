@@ -1,6 +1,11 @@
 #!/bin/bash
 # Run the requested dblift command and report the result.
 #
+# INPUT_ARGS, when non-empty, is passed to dblift verbatim and INPUT_COMMAND is
+# ignored. Otherwise INPUT_COMMAND must name one of migrate, validate or info.
+# There is no default and no composite pipeline: with neither set, this script
+# exits 2 rather than guessing at a command that might apply migrations.
+#
 # dblift is installed by scripts/install.sh in an earlier composite step; this
 # script consumes an already-installed dblift and never installs anything.
 #
@@ -62,17 +67,12 @@ else
     info)
       run_dblift info
       ;;
-    check)
-      run_dblift migrate
-      if [ "$exit_code" -eq 0 ]; then
-        run_dblift validate
-      fi
-      if [ "$exit_code" -eq 0 ]; then
-        run_dblift info
-      fi
+    "")
+      echo "run.sh: no command given (valid values: migrate, validate, info); alternatively set 'args' to pass raw arguments to the dblift CLI" >&2
+      exit 2
       ;;
     *)
-      echo "run.sh: unknown command '${INPUT_COMMAND:-}' (valid values: migrate, validate, info, check)" >&2
+      echo "run.sh: unknown command '${INPUT_COMMAND:-}' (valid values: migrate, validate, info)" >&2
       exit 2
       ;;
   esac

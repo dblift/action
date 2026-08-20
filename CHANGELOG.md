@@ -10,9 +10,11 @@ Semantic Versioning.
 ### Added
 
 - Composite GitHub Action that installs the `dblift` Python package and runs
-  a migration command against a database you configure. `command` selects a
-  shortcut pipeline (`check`, `migrate`, `validate`, `info`); `args` passes
-  raw dblift CLI arguments instead.
+  a migration command against a database you configure. `command` names the
+  dblift command to run (`migrate`, `validate`, `info`); `args` passes raw
+  dblift CLI arguments instead. `command` has no default, so the Action never
+  runs a command the caller did not name; setting neither it nor `args` is an
+  error.
 - `packages`, `version`, `extras` and `index-url` inputs to control how the
   `dblift` package is installed.
 - `working-directory` and `env-name` inputs to select the project and
