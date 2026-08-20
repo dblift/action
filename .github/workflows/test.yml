@@ -95,10 +95,13 @@ jobs:
             exit 1
           fi
 
-  # Executes the pr-comment recipe end to end. `command: validate` applies
-  # nothing, so the plan the step renders must still list the fixture's
-  # pending migrations -- which it only does when the plan is rendered before
-  # the run step, against an already-installed dblift.
+  # Regression test for the plan/run ordering. `command: migrate` APPLIES the
+  # fixture's migrations, so the rendered plan is only non-empty if the plan
+  # step ran before the run step, against an already-installed dblift. Render
+  # it afterwards and the dry run sees a fully-migrated database, the plan
+  # collapses to "no pending migrations", and the heading assertion below
+  # fails. A non-destructive command here would pass under either ordering and
+  # prove nothing.
   action-smoke-plan:
     runs-on: ubuntu-latest
     steps:
@@ -112,7 +115,7 @@ jobs:
         id: dblift
         uses: ./
         with:
-          command: validate
+          command: migrate
           packages: dblift
           working-directory: ${{ runner.temp }}/smoke-project-plan
           pr-comment: true

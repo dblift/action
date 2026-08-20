@@ -219,6 +219,41 @@ for name, output_name in required_output_assertions.items():
         )
         sys.exit(1)
 
+# --- action-smoke-plan must run a command that APPLIES ----------------------
+# The job's whole value is proving the plan is rendered before the run step.
+# That only holds if the command applies the migrations: with a
+# non-destructive command the plan is non-empty under either ordering, and
+# the job passes with the ordering bug present.
+
+plan_job_step = next(
+    (
+        step
+        for step in jobs['action-smoke-plan'].get('steps', [])
+        if step.get('uses') == './'
+    ),
+    None,
+)
+if plan_job_step is None:
+    print("ERROR: test.yml 'action-smoke-plan' job never invokes the Action", file=sys.stderr)
+    sys.exit(1)
+
+plan_job_with = plan_job_step.get('with', {}) or {}
+if plan_job_with.get('command') != 'migrate':
+    print(
+        f"ERROR: test.yml 'action-smoke-plan' runs command "
+        f"{plan_job_with.get('command')!r}; it must run 'migrate', or it passes "
+        f"whether or not the plan is rendered before the run step",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if str(plan_job_with.get('pr-comment')).lower() != 'true':
+    print(
+        "ERROR: test.yml 'action-smoke-plan' does not enable pr-comment, so no "
+        "plan is rendered at all",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 # --- The published PostgreSQL recipe is the recipe a job executes -----------
 # The README quick start is the copy-paste users start from. If it drifts from
 # the job that proves it works -- a different image, a dropped health check --
