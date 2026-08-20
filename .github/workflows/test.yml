@@ -91,3 +91,40 @@ jobs:
             echo "expected pending-count=0, got '${PENDING_COUNT}'" >&2
             exit 1
           fi
+
+  # Executes the pr-comment recipe end to end. `command: validate` applies
+  # nothing, so the plan the step renders must still list the fixture's
+  # pending migrations -- which it only does when the plan is rendered before
+  # the run step, against an already-installed dblift.
+  action-smoke-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Copy fixture project outside the repository root
+        run: cp -r tests/fixtures/project "$RUNNER_TEMP/smoke-project-plan"
+
+      - name: Run dblift action
+        id: dblift
+        uses: ./
+        with:
+          command: validate
+          packages: dblift
+          working-directory: ${{ runner.temp }}/smoke-project-plan
+          pr-comment: true
+
+      - name: Assert the rendered plan lists a pending migration
+        env:
+          PLAN_SQL: ${{ steps.dblift.outputs.sql }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PLAN_SQL" ]; then
+            echo "expected a non-empty 'sql' output, got nothing" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$PLAN_SQL" | grep -q '^### V'; then
+            echo "expected the plan to contain a migration heading, got:" >&2
+            printf '%s\n' "$PLAN_SQL" >&2
+            exit 1
+          fi

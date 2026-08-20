@@ -10,12 +10,17 @@ set -euo pipefail
 # glob matches nothing).
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 
+tmp_root="$repo_root/tests/tmp/test-action-wiring"
+rm -rf "$tmp_root"
+mkdir -p "$tmp_root"
+
 python3 << EOF
 import re
 import sys
 import yaml
 
 repo_root = "${repo_root}"
+tmp_root = "${tmp_root}"
 
 with open(f"{repo_root}/action.yml") as f:
     action = yaml.safe_load(f)
@@ -165,12 +170,211 @@ else:
             f"inputs.pr-comment == 'true'"
         )
 
+# --- Step order: setup-python, then install, then plan, then run ------------
+# The plan must be rendered BEFORE the run step applies anything, or a
+# dry-run preview of "check" or "migrate" reports an empty plan every time
+# because those commands have already applied the migrations being previewed.
+# Both of those in turn need dblift installed, so install comes first.
+
+def step_index(predicate, label):
+    for i, step in enumerate(steps):
+        if predicate(step):
+            return i
+    errors.append(f"no step matches {label}")
+    return None
+
+order = [
+    ('actions/setup-python', step_index(
+        lambda s: isinstance(s.get('uses'), str) and s['uses'].startswith('actions/setup-python@'),
+        'actions/setup-python',
+    )),
+    ('install', step_index(lambda s: s.get('id') == 'install', "id 'install'")),
+    ('plan', step_index(lambda s: s.get('id') == 'plan', "id 'plan'")),
+    ('dblift', step_index(lambda s: s.get('id') == 'dblift', "id 'dblift'")),
+]
+
+if all(i is not None for _, i in order):
+    for (prev_label, prev_i), (next_label, next_i) in zip(order, order[1:]):
+        if prev_i > next_i:
+            errors.append(
+                f"step '{prev_label}' (position {prev_i}) must come before "
+                f"'{next_label}' (position {next_i})"
+            )
+
+# --- Dump the plan step's shell body so the cases below can execute it ------
+
+plan_step = next((s for s in steps if s.get('id') == 'plan'), None)
+if plan_step is not None:
+    with open(f"{tmp_root}/plan-body.sh", "w") as out:
+        out.write(plan_step.get('run', ''))
+
 if errors:
     for e in errors:
         print(f"ERROR: {e}", file=sys.stderr)
     sys.exit(1)
 
-print("test-action-wiring.sh: all checks passed")
+print("test-action-wiring.sh: static checks passed")
 sys.exit(0)
 
 EOF
+
+# --- Behavioural cases: execute the plan step's shell body ------------------
+# The body above is inline shell inside action.yml, so nothing else in this
+# suite can reach it. The python block dumped it to $tmp_root/plan-body.sh;
+# these cases run it against a recording stub standing in for dblift (via the
+# body's DBLIFT_BIN hook) and assert the guarantees that matter:
+#   - the dry-run flags are present, so the plan step can never apply
+#     migrations to the caller's database;
+#   - the JSON log is written under $RUNNER_TEMP (Global Constraint 4);
+#   - the rendered plan reaches the step's `sql` output;
+#   - the body moves into INPUT_WORKING_DIRECTORY first.
+# No network, no real dblift, no container.
+
+plan_body="$tmp_root/plan-body.sh"
+
+failures=0
+
+fail() {
+  echo "FAIL: $1" >&2
+  failures=$((failures + 1))
+}
+
+if [ ! -s "$plan_body" ]; then
+  echo "ERROR: the plan step body was not extracted to $plan_body" >&2
+  exit 1
+fi
+
+# Records its working directory and argv, then writes a canned plan log to
+# wherever it was told to put one, so plan-sql.sh downstream has real input.
+dblift_stub="$tmp_root/dblift-stub.sh"
+cat > "$dblift_stub" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+
+pwd -P > "$PLAN_CWD_LOG"
+printf '%s\n' "$@" > "$PLAN_ARGV_LOG"
+
+log_dir=""
+log_file=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    --log-dir) log_dir="$arg" ;;
+    --log-file) log_file="$arg" ;;
+  esac
+  prev="$arg"
+done
+
+if [ -n "$log_dir" ] && [ -n "$log_file" ]; then
+  printf '%s\n' "$log_dir/$log_file" > "$PLAN_LOG_PATH_LOG"
+  cp "$PLAN_FIXTURE" "$log_dir/$log_file"
+fi
+STUB
+chmod +x "$dblift_stub"
+
+work_dir="$tmp_root/workdir"
+mkdir -p "$work_dir"
+runner_temp="$tmp_root/runner-temp"
+mkdir -p "$runner_temp"
+
+plan_output="$tmp_root/github-output"
+plan_summary="$tmp_root/github-summary"
+: > "$plan_output"
+: > "$plan_summary"
+
+set +e
+env \
+  INPUT_WORKING_DIRECTORY="$work_dir" \
+  INPUT_ENV_NAME="" \
+  RUNNER_TEMP="$runner_temp" \
+  GITHUB_OUTPUT="$plan_output" \
+  GITHUB_STEP_SUMMARY="$plan_summary" \
+  GITHUB_ACTION_PATH="$repo_root" \
+  DBLIFT_BIN="$dblift_stub" \
+  PLAN_CWD_LOG="$tmp_root/cwd.log" \
+  PLAN_ARGV_LOG="$tmp_root/argv.log" \
+  PLAN_LOG_PATH_LOG="$tmp_root/logpath.log" \
+  PLAN_FIXTURE="$repo_root/tests/fixtures/plan.json" \
+  bash "$plan_body" > "$tmp_root/plan-stdout" 2> "$tmp_root/plan-stderr"
+plan_exit=$?
+set -e
+
+if [ "$plan_exit" -ne 0 ]; then
+  fail "plan body: expected exit 0, got $plan_exit (stderr: $(cat "$tmp_root/plan-stderr"))"
+fi
+
+# --- The dry-run flags are present ------------------------------------------
+# Without --dry-run the plan step would APPLY the caller's pending migrations
+# while claiming to preview them.
+
+for expected in migrate --dry-run --show-sql --log-format; do
+  if ! grep -qxF -- "$expected" "$tmp_root/argv.log"; then
+    fail "plan body: expected dblift to be invoked with '$expected' (argv: $(tr '\n' ' ' < "$tmp_root/argv.log"))"
+  fi
+done
+
+# --- The JSON log is written under \$RUNNER_TEMP, never the workspace -------
+
+actual_log_path=$(cat "$tmp_root/logpath.log" 2>/dev/null || true)
+if [ "$actual_log_path" != "$runner_temp/plan.json" ]; then
+  fail "plan body: expected the JSON log at '$runner_temp/plan.json', got '$actual_log_path'"
+fi
+if [ -e "$work_dir/plan.json" ] || [ -e "$work_dir/plan.md" ]; then
+  fail "plan body: wrote plan artefacts into the working directory: $(ls -A "$work_dir")"
+fi
+
+# --- The rendered plan reaches the step's sql output ------------------------
+
+if ! grep -q '^sql<<' "$plan_output"; then
+  fail "plan body: expected a 'sql<<' heredoc in \$GITHUB_OUTPUT (output: $(cat "$plan_output"))"
+fi
+if ! grep -q '^### V' "$plan_output"; then
+  fail "plan body: expected the rendered plan headings in the sql output (output: $(cat "$plan_output"))"
+fi
+
+# --- The body moves into INPUT_WORKING_DIRECTORY first ----------------------
+# Without the cd, dblift reads its configuration from the workflow's default
+# directory whenever working-directory is set.
+
+expected_cwd=$(cd "$work_dir" && pwd -P)
+actual_cwd=$(cat "$tmp_root/cwd.log" 2>/dev/null || true)
+if [ "$actual_cwd" != "$expected_cwd" ]; then
+  fail "plan body: expected dblift to run in '$expected_cwd', got '$actual_cwd'"
+fi
+
+# --- A failure anywhere in the body must not fail the step ------------------
+# I6: continue-on-error is gone, so the body itself has to absorb failures.
+
+failing_stub="$tmp_root/dblift-failing.sh"
+cat > "$failing_stub" <<'STUB'
+#!/bin/bash
+echo "stub dblift: simulated failure" >&2
+exit 4
+STUB
+chmod +x "$failing_stub"
+
+set +e
+env \
+  INPUT_WORKING_DIRECTORY="$work_dir" \
+  INPUT_ENV_NAME="" \
+  RUNNER_TEMP="$runner_temp" \
+  GITHUB_OUTPUT="$tmp_root/github-output-fail" \
+  GITHUB_STEP_SUMMARY="$tmp_root/github-summary-fail" \
+  GITHUB_ACTION_PATH="$repo_root" \
+  DBLIFT_BIN="$failing_stub" \
+  bash "$plan_body" > "$tmp_root/plan-stdout-fail" 2> "$tmp_root/plan-stderr-fail"
+plan_fail_exit=$?
+set -e
+
+if [ "$plan_fail_exit" -ne 0 ]; then
+  fail "plan body: a failing dblift must not fail the step, got exit $plan_fail_exit"
+fi
+if ! grep -qF 'could not render the migration plan' "$tmp_root/plan-stderr-fail"; then
+  fail "plan body: expected the failure to be reported on stderr (stderr: $(cat "$tmp_root/plan-stderr-fail"))"
+fi
+
+if [ "$failures" -eq 0 ]; then
+  echo "test-action-wiring.sh: all checks passed"
+fi
+
+exit "$failures"

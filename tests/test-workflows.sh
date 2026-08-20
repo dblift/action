@@ -1,7 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Test .github/workflows and .github/dependabot.yml structure.
+# Test .github/workflows and .github/dependabot.yml structure, that CI
+# actually runs this repository's test suite against this checkout of the
+# Action, and that the PostgreSQL recipe the README publishes is the one a
+# job executes.
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 
 yaml_files=(
@@ -93,6 +96,147 @@ needs_list = [needs] if isinstance(needs, str) else (needs or [])
 if 'test' not in needs_list:
     print(f"ERROR: release.yml 'retag' job does not declare 'needs: test' (got: {needs!r})", file=sys.stderr)
     sys.exit(1)
+
+# --- CI must actually run the test suite ------------------------------------
+# Replacing the suite invocation with anything else (a stub, an echo, a
+# renamed script) leaves every other assertion here green while CI checks
+# nothing at all.
+
+suite_command = "bash tests/run.sh"
+
+for workflow_name, workflow in (
+    ("test.yml", test_workflow),
+    ("release.yml", release_workflow),
+):
+    workflow_jobs = workflow.get("jobs", {})
+    test_job = workflow_jobs.get("test")
+    if test_job is None:
+        print(f"ERROR: {workflow_name} is missing the 'test' job", file=sys.stderr)
+        sys.exit(1)
+    runs = [
+        step.get("run", "").strip()
+        for step in test_job.get("steps", [])
+        if "run" in step
+    ]
+    if suite_command not in runs:
+        print(
+            f"ERROR: {workflow_name} 'test' job never runs '{suite_command}' "
+            f"(run steps: {runs})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+# --- The smoke jobs must exercise THIS checkout of the Action ---------------
+# Repointing them at a published tag would test whatever is already released
+# rather than the change under review, and would still pass.
+
+smoke_jobs = {
+    name: job for name, job in jobs.items() if name.startswith("action-smoke")
+}
+if not smoke_jobs:
+    print("ERROR: test.yml declares no action-smoke* job", file=sys.stderr)
+    sys.exit(1)
+
+for name, job in smoke_jobs.items():
+    uses_values = [step.get("uses") for step in job.get("steps", []) if "uses" in step]
+    if "./" not in uses_values:
+        print(
+            f"ERROR: test.yml '{name}' job does not run the Action from this "
+            f"checkout with 'uses: ./' (uses values: {uses_values})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+# --- Every smoke job must assert on an output -------------------------------
+# A smoke job that runs the Action but checks nothing passes whenever the
+# Action merely exits 0, which is exactly the failure the pr-comment bug had.
+
+required_output_assertions = {
+    "action-smoke": "pending-count",
+    "action-smoke-postgres": "pending-count",
+    "action-smoke-plan": "sql",
+}
+
+for name, output_name in required_output_assertions.items():
+    job = jobs.get(name)
+    if job is None:
+        print(f"ERROR: test.yml is missing the '{name}' job", file=sys.stderr)
+        sys.exit(1)
+    reference = f"steps.dblift.outputs.{output_name}"
+    asserting_steps = [
+        step
+        for step in job.get("steps", [])
+        if "run" in step
+        and any(reference in str(v) for v in (step.get("env", {}) or {}).values())
+    ]
+    if not asserting_steps:
+        print(
+            f"ERROR: test.yml '{name}' job has no step asserting on "
+            f"{reference}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not any("exit 1" in step["run"] for step in asserting_steps):
+        print(
+            f"ERROR: test.yml '{name}' job reads {reference} but never fails "
+            f"the job on a bad value",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+# --- The published PostgreSQL recipe is the recipe a job executes -----------
+# The README quick start is the copy-paste users start from. If it drifts from
+# the job that proves it works -- a different image, a dropped health check --
+# we would be publishing an untested recipe.
+
+fence = chr(96) * 3
+
+with open(f"{repo_root}/README.md") as f:
+    readme = f.read()
+
+open_marker = fence + "yaml"
+open_at = readme.find(open_marker)
+if open_at == -1:
+    print("ERROR: README.md has no yaml code block", file=sys.stderr)
+    sys.exit(1)
+block_start = open_at + len(open_marker)
+close_at = readme.find(fence, block_start)
+if close_at == -1:
+    print("ERROR: README.md's first yaml code block is never closed", file=sys.stderr)
+    sys.exit(1)
+
+readme_workflow = yaml.safe_load(readme[block_start:close_at])
+readme_jobs = readme_workflow.get("jobs", {}) or {}
+if len(readme_jobs) != 1:
+    print(
+        f"ERROR: README.md's first yaml block should define exactly one job, "
+        f"found {sorted(readme_jobs)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+readme_job = next(iter(readme_jobs.values()))
+executed_job = jobs["action-smoke-postgres"]
+
+for key in ("env", "services"):
+    documented = readme_job.get(key)
+    executed = executed_job.get(key)
+    if not documented:
+        print(
+            f"ERROR: README.md's quick start declares no '{key}' block, so the "
+            f"published recipe is not the one action-smoke-postgres executes",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if documented != executed:
+        print(
+            f"ERROR: README.md's quick start '{key}' block differs from the "
+            f"action-smoke-postgres job that executes it.\n"
+            f"  README:  {documented!r}\n"
+            f"  test.yml: {executed!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 print("workflow validation passed")
 sys.exit(0)
