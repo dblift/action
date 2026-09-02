@@ -49,11 +49,11 @@ found_script_ref = False
 for step in run_steps:
     for match in script_ref_re.findall(step['run']):
         found_script_ref = True
-        if not match.startswith('$GITHUB_ACTION_PATH/'):
+        if not match.startswith('\$GITHUB_ACTION_PATH/'):
             errors.append(
                 f"script reference '{match}' in step "
                 f"'{step.get('name', step.get('id', '?'))}' is not rooted at "
-                f"$GITHUB_ACTION_PATH"
+                f"\$GITHUB_ACTION_PATH"
             )
 
 if not found_script_ref:
