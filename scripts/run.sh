@@ -10,10 +10,10 @@
 # dblift is installed by scripts/install.sh in an earlier composite step; this
 # script consumes an already-installed dblift and never installs anything.
 #
-# Reads INPUT_COMMAND, INPUT_ARGS, INPUT_WORKING_DIRECTORY, INPUT_ENV_NAME and
-# INPUT_SUMMARY from the environment (as set by the composite action from its
-# inputs), plus the runner-provided GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
-# RUNNER_TEMP.
+# Reads INPUT_COMMAND, INPUT_ARGS, INPUT_WORKING_DIRECTORY, INPUT_ENV_NAME,
+# INPUT_CONFIG, INPUT_SCRIPTS and INPUT_SUMMARY from the environment (as set
+# by the composite action from its inputs), plus the runner-provided
+# GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and RUNNER_TEMP.
 #
 # Test-only hook, not used in production:
 #   DBLIFT_BIN - dblift executable to invoke (default: dblift)
@@ -53,6 +53,12 @@ run_dblift() {
   local cmd=("$dblift_bin" "$@")
   if [ -n "${INPUT_ENV_NAME:-}" ]; then
     cmd+=(--env "$INPUT_ENV_NAME")
+  fi
+  if [ -n "${INPUT_CONFIG:-}" ]; then
+    cmd+=(--config "$INPUT_CONFIG")
+  fi
+  if [ -n "${INPUT_SCRIPTS:-}" ]; then
+    cmd+=(--scripts "$INPUT_SCRIPTS")
   fi
 
   if [ -n "$ran_commands" ]; then
@@ -118,11 +124,12 @@ fi
 
 # --- 4. Compute pending-count, independently of the run above ---------------
 # The probe rebuilds its own `dblift info` command from the working directory
-# and --env alone, so it is only run when the command came from INPUT_COMMAND:
-# with raw `args` the probe cannot replicate flags like --config and would
-# silently count against the wrong project. In that case pending-count stays
-# empty, which the docs state. Probe failures are reported to stderr rather
-# than swallowed -- an empty pending-count must be diagnosable from the log.
+# plus --env, --config and --scripts, so it is only run when the command came
+# from INPUT_COMMAND: with raw `args` the probe cannot replicate arbitrary
+# flags and would silently count against the wrong project. In that case
+# pending-count stays empty, which the docs state. Probe failures are reported
+# to stderr rather than swallowed -- an empty pending-count must be
+# diagnosable from the log.
 
 pending_count=""
 
@@ -132,6 +139,12 @@ else
   probe_cmd=("$dblift_bin" --log-dir "$RUNNER_TEMP/dblift-logs" info --format json)
   if [ -n "${INPUT_ENV_NAME:-}" ]; then
     probe_cmd+=(--env "$INPUT_ENV_NAME")
+  fi
+  if [ -n "${INPUT_CONFIG:-}" ]; then
+    probe_cmd+=(--config "$INPUT_CONFIG")
+  fi
+  if [ -n "${INPUT_SCRIPTS:-}" ]; then
+    probe_cmd+=(--scripts "$INPUT_SCRIPTS")
   fi
 
   if ! info_json=$("${probe_cmd[@]}"); then
