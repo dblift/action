@@ -32,6 +32,8 @@ expected_inputs = {
     'python-version': '3.11',
     'working-directory': '.',
     'env-name': '',
+    'config': '',
+    'scripts': '',
     'index-url': '',
     'summary': 'true',
     'pr-comment': 'false',

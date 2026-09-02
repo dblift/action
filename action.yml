@@ -36,6 +36,14 @@ inputs:
     description: 'Environment to select, passed as `--env <name>`.'
     required: false
     default: ''
+  config:
+    description: 'Path to the dblift configuration file, relative to `working-directory`, passed as `--config <path>`. Empty uses default discovery.'
+    required: false
+    default: ''
+  scripts:
+    description: 'Path to the migrations directory, relative to `working-directory`, passed as `--scripts <path>`. Empty uses default discovery.'
+    required: false
+    default: ''
   index-url:
     description: 'Alternative pip index URL.'
     required: false
@@ -90,9 +98,11 @@ runs:
     # an empty plan, having already applied the very migrations it was meant
     # to preview.
     # The plan is only rendered when the command comes from `command`: with raw
-    # `args` the dry run below cannot replicate flags like --config, and a plan
+    # `args` the dry run below cannot replicate arbitrary flags, and a plan
     # rendered against the wrong configuration would be posted to the pull
-    # request as if it previewed the real run.
+    # request as if it previewed the real run. First-class config, scripts and
+    # env-name inputs are forwarded here so a non-default project still gets a
+    # plan without using `args`.
     - name: Render migration plan
       id: plan
       if: inputs.pr-comment == 'true' && inputs.args == ''
@@ -100,6 +110,8 @@ runs:
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_SCRIPTS: ${{ inputs.scripts }}
         INPUT_SUMMARY: ${{ inputs.summary }}
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -110,6 +122,12 @@ runs:
         plan_args=(--log-format json --log-dir "$RUNNER_TEMP" --log-file plan.json migrate --dry-run --show-sql)
         if [ -n "${INPUT_ENV_NAME:-}" ]; then
           plan_args+=(--env "$INPUT_ENV_NAME")
+        fi
+        if [ -n "${INPUT_CONFIG:-}" ]; then
+          plan_args+=(--config "$INPUT_CONFIG")
+        fi
+        if [ -n "${INPUT_SCRIPTS:-}" ]; then
+          plan_args+=(--scripts "$INPUT_SCRIPTS")
         fi
 
         delimiter="dblift_sql_$$_${RANDOM}"
@@ -138,5 +156,7 @@ runs:
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_ENV_NAME: ${{ inputs.env-name }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_SCRIPTS: ${{ inputs.scripts }}
         INPUT_SUMMARY: ${{ inputs.summary }}
       run: "$GITHUB_ACTION_PATH/scripts/run.sh"

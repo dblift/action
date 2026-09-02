@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `config` and `scripts` inputs, passed as `--config` and `--scripts`
+  (paths relative to `working-directory`) on the real run, the dry-run plan,
+  and the `pending-count` probe. Empty omits the flag and keeps default
+  discovery. `args` still overrides `command` and still skips the plan and
+  `pending-count`.
+
 ## [1.0.1] - 2026-08-20
 
 ### Changed

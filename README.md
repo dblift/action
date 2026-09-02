@@ -51,6 +51,8 @@ broken ordering fails the job rather than being written to the database.
 | `python-version`     | Python version used to run dblift.                                                                              | `3.11`        |
 | `working-directory`  | Directory containing the dblift configuration file.                                                             | `.`           |
 | `env-name`           | Environment to select, passed as `--env <name>`.                                                                | *(empty)*     |
+| `config`             | Path to the dblift configuration file, relative to `working-directory`, passed as `--config <path>`. Empty uses default discovery. | *(empty)*     |
+| `scripts`            | Path to the migrations directory, relative to `working-directory`, passed as `--scripts <path>`. Empty uses default discovery. | *(empty)*     |
 | `index-url`          | Alternative pip index URL.                                                                                      | *(empty)*     |
 | `summary`            | Write the result to the GitHub step summary.                                                                    | `true`        |
 | `pr-comment`         | Post the migration plan as a pull request comment.                                                              | `false`       |
@@ -116,6 +118,33 @@ own failures, so it never fails the job.
 The plan is rendered before the command runs, so it reports the migrations
 that are pending at the start of the job — including for `command: migrate`,
 which goes on to apply them.
+
+### Non-default config and migrations directory
+
+```yaml
+on: pull_request
+
+permissions:
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dblift/action@v1
+        with:
+          command: migrate
+          config: dblift.ci.yaml
+          scripts: db/migrations
+          pr-comment: true
+```
+
+`config` and `scripts` are relative to `working-directory`. Leave either
+empty to keep dblift's default discovery. The same flags are passed to the
+real command, the dry-run plan, and the `pending-count` probe, so
+`pr-comment` and `pending-count` still work. `args` still overrides
+`command` and still skips both.
 
 ### Passing raw arguments
 
