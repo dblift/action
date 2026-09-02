@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-01
+
 ### Added
 
 - `config` and `scripts` inputs, passed as `--config` and `--scripts`
